@@ -146,7 +146,7 @@ Deze testaanpak zorgt ervoor dat het project later makkelijker uitbreidbaar en b
 - https://risedocs.fairsketch.com/doc/view/164-peppol-ubl-invoice-2-1-bis-billing-3-0-e-invoice-template
 
 ## Cmd's to run
-"""
+```
     docker-compose down -v && docker-compose up --build
 ```
 Add new invoice in database:
@@ -202,3 +202,4 @@ Add new invoice in database:
 </Invoice>', 
 'new');
 
+```
