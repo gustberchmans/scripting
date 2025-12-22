@@ -46,6 +46,30 @@ Describe 'Invoice Processing Logic' {
         }
     }
 
+    Context "Test-InvoiceBusinessRules function" {
+        It "should return true for a valid invoice" {
+            $xmlDoc = [xml]$script:sampleXml
+            $result = Test-InvoiceBusinessRules -xmlDoc $xmlDoc
+            $result | Should -Be $true
+        }
+
+        It "should return false if Supplier Name is just numbers" {
+            # Replace Supplier Name with numbers
+            $invalidXml = $script:sampleXml -replace '<cbc:Name>Demo Supplier Inc.</cbc:Name>', '<cbc:Name>123456</cbc:Name>'
+            $xmlDoc = [xml]$invalidXml
+            $result = Test-InvoiceBusinessRules -xmlDoc $xmlDoc
+            $result | Should -Be $false
+        }
+
+        It "should return false if Customer Name is just numbers" {
+            # Replace Customer Name with numbers
+            $invalidXml = $script:sampleXml -replace '<cbc:Name>Test Customer Ltd.</cbc:Name>', '<cbc:Name>987654</cbc:Name>'
+            $xmlDoc = [xml]$invalidXml
+            $result = Test-InvoiceBusinessRules -xmlDoc $xmlDoc
+            $result | Should -Be $false
+        }
+    }
+
     Context "Full Processing Cycle (simulated)" {
         # This requires manually calling the logic inside the while loop from the main script
         # For simplicity, we'll assume the main script is refactored to have a testable main function.

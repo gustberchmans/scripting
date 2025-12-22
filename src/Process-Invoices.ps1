@@ -88,6 +88,40 @@ function Test-InvoiceTotals {
     return $declaredTotal -eq $calculatedTotal
 }
 
+function Test-InvoiceBusinessRules {
+    param(
+        [xml]$xmlDoc
+    )
+    
+    $ns = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
+    $ns.AddNamespace('cac', 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2')
+    $ns.AddNamespace('cbc', 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2')
+    
+    # Validate Supplier Name
+    $supplierName = $xmlDoc.SelectSingleNode("//cac:AccountingSupplierParty/cac:Party/cac:PartyName/cbc:Name", $ns)
+    if (-not $supplierName -or [string]::IsNullOrWhiteSpace($supplierName.'#text')) {
+        Write-Host "Validation Error: Supplier Name is missing or empty."
+        return $false
+    }
+    if ($supplierName.'#text' -match '^\d+$') {
+        Write-Host "Validation Error: Supplier Name '$($supplierName.'#text')' cannot be purely numeric."
+        return $false
+    }
+
+    # Validate Customer Name
+    $customerName = $xmlDoc.SelectSingleNode("//cac:AccountingCustomerParty/cac:Party/cac:PartyName/cbc:Name", $ns)
+    if (-not $customerName -or [string]::IsNullOrWhiteSpace($customerName.'#text')) {
+        Write-Host "Validation Error: Customer Name is missing or empty."
+        return $false
+    }
+    if ($customerName.'#text' -match '^\d+$') {
+        Write-Host "Validation Error: Customer Name '$($customerName.'#text')' cannot be purely numeric."
+        return $false
+    }
+
+    return $true
+}
+
 # --- Main Processing Loop ---
 
 # Load iText Dependencies
@@ -158,6 +192,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     }
 }
 
+if ($MyInvocation.InvocationName -ne '.') {
 Write-Host "Invoice processing script started. Waiting for database to be ready..."
 Start-Sleep -Seconds 15 # Give the database time to initialize
 
@@ -195,6 +230,9 @@ while ($true) {
             if (-not (Test-InvoiceTotals -xmlDoc $xmlDoc)) {
                 throw "Validation failed: The sum of line items does not match the LegalMonetaryTotal."
             }
+            if (-not (Test-InvoiceBusinessRules -xmlDoc $xmlDoc)) {
+                throw "Validation failed: Business rules check (names, formats) failed."
+            }
 
             # 2. Set status to 'processing'
             Update-InvoiceStatus -invoiceId $invoiceId -status 'processing'
@@ -229,4 +267,5 @@ while ($true) {
     }
     
     Start-Sleep -Seconds $pollingIntervalSeconds
+}
 }
