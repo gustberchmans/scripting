@@ -4,10 +4,10 @@ services:
   app:
     build: .
     environment:
-      - DB_HOST=db
-      - DB_USER=root
-      - DB_PASSWORD=rootpassword
-      - DB_DATABASE=invoices_db
+      - DB_HOST=${DB_HOST}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DATABASE=${DB_DATABASE}
     volumes:
       - ./output:/app/output
     depends_on:
@@ -17,8 +17,8 @@ services:
   db:
     image: mysql:8.0
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: invoices_db
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_DATABASE}
     volumes:
       - ./db-init:/docker-entrypoint-initdb.d
     healthcheck:
