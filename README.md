@@ -142,17 +142,18 @@ Deze testaanpak zorgt ervoor dat het project later makkelijker uitbreidbaar en b
 ---
 
 ## Sources:
-[]Gemini
-[]https://risedocs.fairsketch.com/doc/view/164-peppol-ubl-invoice-2-1-bis-billing-3-0-e-invoice-template
+- Gemini
+- https://risedocs.fairsketch.com/doc/view/164-peppol-ubl-invoice-2-1-bis-billing-3-0-e-invoice-template
 
 ## Cmd's to run
 """
     docker-compose down -v && docker-compose up --build
-"""
-
-"""
+```
+Add new invoice in database:
+```
     docker exec -it v1-db-1 mysql -u root -p invoices_db
-
+```
+```
     INSERT INTO invoices (peppol_xml, status) VALUES (
 '<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
     <cbc:CustomizationID>urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0</cbc:CustomizationID>
@@ -201,5 +202,3 @@ Deze testaanpak zorgt ervoor dat het project later makkelijker uitbreidbaar en b
 </Invoice>', 
 'new');
 
-
-"""
