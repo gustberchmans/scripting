@@ -21,7 +21,7 @@ $connectionName = "InvoicesDB"
 
 $xsltPath = "/app/templates/invoice-transform.xslt"
 $outputDir = "/app/output"
-$pollingIntervalSeconds = 30
+$pollingIntervalSeconds = 5
 
 # --- Dependency Check ---
 # Dependencies (SimplySql, iText) are installed via Dockerfile.
@@ -122,6 +122,21 @@ function Test-InvoiceBusinessRules {
     return $true
 }
 
+function Convert-HtmlToPdf {
+    param(
+        [string]$htmlContent,
+        [string]$outputPath,
+        [string]$baseUri
+    )
+    $pdfWriter = [iText.Kernel.Pdf.PdfWriter]::new($outputPath)
+    $pdfDocument = [iText.Kernel.Pdf.PdfDocument]::new($pdfWriter)
+    $pdfDocument.SetDefaultPageSize([iText.Kernel.Geom.PageSize]::A4)
+    $converterProperties = [iText.Html2pdf.ConverterProperties]::new()
+    $converterProperties.SetBaseUri($baseUri)
+    [iText.Html2Pdf.HtmlConverter]::ConvertToPdf($htmlContent, $pdfDocument, $converterProperties)
+    $pdfDocument.Close()
+}
+
 # --- Main Processing Loop ---
 
 # Load iText Dependencies
@@ -178,6 +193,29 @@ CREATE TABLE IF NOT EXISTS invoices (
 "@
         Invoke-SqlUpdate -Query $tableQuery -ConnectionName $connectionName -ErrorAction Stop
 
+        # --- MVP Requirement: Trigger and Event Handling ---
+        # Create Audit Table to satisfy the requirement of creating a record on event
+        $auditTableQuery = @"
+CREATE TABLE IF NOT EXISTS invoice_audit (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    invoice_id INT,
+    action VARCHAR(50),
+    log_time DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"@
+        Invoke-SqlUpdate -Query $auditTableQuery -ConnectionName $connectionName -ErrorAction Stop
+
+        # Create Trigger (Drop if exists to ensure idempotency)
+        Invoke-SqlUpdate -Query "DROP TRIGGER IF EXISTS after_invoice_insert;" -ConnectionName $connectionName -ErrorAction Stop
+        
+        $triggerQuery = @"
+CREATE TRIGGER after_invoice_insert 
+AFTER INSERT ON invoices
+FOR EACH ROW 
+INSERT INTO invoice_audit (invoice_id, action) VALUES (NEW.id, 'NEW_INVOICE_RECEIVED');
+"@
+        Invoke-SqlUpdate -Query $triggerQuery -ConnectionName $connectionName -ErrorAction Stop
+
         # Insert sample data if table is empty
         $count = Invoke-SqlQuery -Query "SELECT COUNT(*) AS c FROM invoices" -ConnectionName $connectionName -ErrorAction Stop
         if ($count.c -eq 0) {
@@ -205,9 +243,18 @@ catch {
     exit 1
 }
 
+Write-Host "Database connected. Starting polling loop (Interval: ${pollingIntervalSeconds}s)..." -ForegroundColor Cyan
+
 while ($true) {
     try {
-        $newInvoices = Invoke-SqlQuery -Query "SELECT id, peppol_xml FROM invoices WHERE status = 'new';" -ConnectionName $connectionName -ErrorAction Stop
+        # Check count first to avoid "No resultset" warning from SimplySql on empty SELECT
+        $countCheck = Invoke-SqlQuery -Query "SELECT COUNT(*) AS c FROM invoices WHERE status = 'new';" -ConnectionName $connectionName -ErrorAction Stop
+        
+        if ($countCheck.c -gt 0) {
+            $newInvoices = Invoke-SqlQuery -Query "SELECT id, peppol_xml FROM invoices WHERE status = 'new';" -ConnectionName $connectionName -ErrorAction Stop
+        } else {
+            $newInvoices = @()
+        }
     }
     catch {
         Write-Host "Error querying database: $($_.Exception.Message). Attempting reconnection..." -ForegroundColor Yellow
@@ -216,10 +263,6 @@ while ($true) {
         continue
     }
     
-    if (-not $newInvoices) {
-        Write-Host "No new invoices found. Sleeping for $pollingIntervalSeconds seconds."
-    }
-
     foreach ($invoice in $newInvoices) {
         $invoiceId = $invoice.id
         Write-Host "Processing invoice ID: $invoiceId"
@@ -246,13 +289,7 @@ while ($true) {
             # 4. Generate PDF
             $pdfPath = Join-Path -Path $outputDir -ChildPath "invoice-$($invoiceId)-$(Get-Date -Format 'yyyyMMddHHmmss').pdf"
             
-            $pdfWriter = [iText.Kernel.Pdf.PdfWriter]::new($pdfPath)
-            $pdfDocument = [iText.Kernel.Pdf.PdfDocument]::new($pdfWriter)
-            $pdfDocument.SetDefaultPageSize([iText.Kernel.Geom.PageSize]::A4)
-            $converterProperties = [iText.Html2pdf.ConverterProperties]::new()
-            $converterProperties.SetBaseUri($outputDir)
-            [iText.Html2Pdf.HtmlConverter]::ConvertToPdf($htmlContent, $pdfDocument, $converterProperties)
-            $pdfDocument.Close()
+            Convert-HtmlToPdf -htmlContent $htmlContent -outputPath $pdfPath -baseUri $outputDir
 
             Write-Host "Successfully generated PDF: $pdfPath"
 
@@ -266,6 +303,9 @@ while ($true) {
         }
     }
     
-    Start-Sleep -Seconds $pollingIntervalSeconds
+    if (-not $newInvoices) {
+        Write-Host "No new invoices found. Sleeping for $pollingIntervalSeconds seconds."
+        Start-Sleep -Seconds $pollingIntervalSeconds
+    }
 }
 }

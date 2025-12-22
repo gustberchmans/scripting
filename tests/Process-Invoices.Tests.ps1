@@ -11,7 +11,7 @@ BeforeAll {
         $call = [PSCustomObject]@{ InvoiceId = $invoiceId; Status = $status; ErrorMessage = $errorMessage }
         $script:updateStatusCalls.Add($call) | Out-Null
     }
-    Mock -CommandName 'Out-Pdf'
+    Mock -CommandName 'Convert-HtmlToPdf'
     Mock -CommandName 'Start-Sleep'
     Mock -CommandName 'Write-Host'
 
@@ -90,7 +90,7 @@ Describe 'Invoice Processing Logic' {
                 }
                 Update-InvoiceStatus -invoiceId $invoice.id -status 'processing'
                 $html = Transform-XmlToHtml -xmlContent $invoice.peppol_xml -xsltPath "$PSScriptRoot/../templates/invoice-transform.xslt"
-                $html | Out-Pdf -Path "test.pdf"
+                Convert-HtmlToPdf -htmlContent $html -outputPath "test.pdf" -baseUri "/tmp"
                 Update-InvoiceStatus -invoiceId $invoice.id -status 'processed'
             } catch {}
 
