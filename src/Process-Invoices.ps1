@@ -65,6 +65,11 @@ function Test-InvoiceTotals {
         [xml]$xmlDoc
     )
     
+    if (-not $xmlDoc) {
+        Write-Host "Validation Error: XML content is empty or invalid."
+        return $false
+    }
+
     # Define namespaces for XPath
     $ns = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
     $ns.AddNamespace('cac', 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2')
@@ -93,6 +98,11 @@ function Test-InvoiceBusinessRules {
         [xml]$xmlDoc
     )
     
+    if (-not $xmlDoc) {
+        Write-Host "Validation Error: XML content is empty or invalid."
+        return $false
+    }
+
     $ns = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
     $ns.AddNamespace('cac', 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2')
     $ns.AddNamespace('cbc', 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2')

@@ -3,15 +3,10 @@
 BeforeAll {
     # Mock database and other external cmdlets
     Mock -CommandName 'Import-Module' -MockWith { }
+    Mock -CommandName 'Add-Type' -MockWith { }
     Mock -CommandName 'Open-MySqlConnection' -MockWith { return $true }
     Mock -CommandName 'Invoke-SqlQuery' -MockWith { return $script:mockInvoices }
     Mock -CommandName 'Invoke-SqlUpdate' -MockWith { return @{ RecordsAffected = 1 } }
-    Mock -CommandName 'Update-InvoiceStatus' -MockWith {
-        param($invoiceId, $status, $errorMessage)
-        $call = [PSCustomObject]@{ InvoiceId = $invoiceId; Status = $status; ErrorMessage = $errorMessage }
-        $script:updateStatusCalls.Add($call) | Out-Null
-    }
-    Mock -CommandName 'Convert-HtmlToPdf'
     Mock -CommandName 'Start-Sleep'
     Mock -CommandName 'Write-Host'
 
@@ -19,8 +14,16 @@ BeforeAll {
     # The main loop is problematic for testing, so we test the functions directly.
     . "$PSScriptRoot/../src/Process-Invoices.ps1"
 
+    # Mock script functions AFTER dot-sourcing to override them
+    Mock -CommandName 'Update-InvoiceStatus' -MockWith {
+        param($invoiceId, $status, $errorMessage)
+        $call = [PSCustomObject]@{ InvoiceId = $invoiceId; Status = $status; ErrorMessage = $errorMessage }
+        $script:updateStatusCalls.Add($call) | Out-Null
+    }
+    Mock -CommandName 'Convert-HtmlToPdf'
+
     # Load sample XML data
-    $script:sampleXml = Get-Content -Path "$PSScriptRoot/../sample_data/sample-invoice.xml" -Raw
+    $script:sampleDataPath = "$PSScriptRoot/../sample_data"
 }
 
 Describe 'Invoice Processing Logic' {
@@ -31,42 +34,22 @@ Describe 'Invoice Processing Logic' {
         Mock -CommandName 'Test-Path' -MockWith { return $true }
     }
 
-    Context "Test-InvoiceTotals function" {
-        It "should return true for a valid invoice" {
-            $xmlDoc = [xml]$script:sampleXml
-            $result = Test-InvoiceTotals -xmlDoc $xmlDoc
-            $result | Should -Be $true
-        }
+    Context "Data Driven Tests (Sample Files)" {
+        $testCases = @(
+            @{ Name="Valid Invoice"; File="valid.xml"; ExpectTotals=$true; ExpectRules=$true }
+            @{ Name="Invalid Totals"; File="invalid-totals.xml"; ExpectTotals=$false; ExpectRules=$true }
+            @{ Name="Invalid Business Rules"; File="invalid-business-rules.xml"; ExpectTotals=$true; ExpectRules=$false }
+        )
 
-        It "should return false for an invalid invoice" {
-            $invalidXml = $script:sampleXml -replace '<cbc:LineExtensionAmount currencyID="EUR">150.00</cbc:LineExtensionAmount>', '<cbc:LineExtensionAmount currencyID="EUR">149.99</cbc:LineExtensionAmount>'
-            $xmlDoc = [xml]$invalidXml
-            $result = Test-InvoiceTotals -xmlDoc $xmlDoc
-            $result | Should -Be $false
-        }
-    }
+        It "Validation checks for <Name>" -TestCases $testCases {
+            param($Name, $File, $ExpectTotals, $ExpectRules)
+            
+            $path = Join-Path $script:sampleDataPath $File
+            $content = Get-Content $path -Raw
+            $xml = [xml]$content
 
-    Context "Test-InvoiceBusinessRules function" {
-        It "should return true for a valid invoice" {
-            $xmlDoc = [xml]$script:sampleXml
-            $result = Test-InvoiceBusinessRules -xmlDoc $xmlDoc
-            $result | Should -Be $true
-        }
-
-        It "should return false if Supplier Name is just numbers" {
-            # Replace Supplier Name with numbers
-            $invalidXml = $script:sampleXml -replace '<cbc:Name>Demo Supplier Inc.</cbc:Name>', '<cbc:Name>123456</cbc:Name>'
-            $xmlDoc = [xml]$invalidXml
-            $result = Test-InvoiceBusinessRules -xmlDoc $xmlDoc
-            $result | Should -Be $false
-        }
-
-        It "should return false if Customer Name is just numbers" {
-            # Replace Customer Name with numbers
-            $invalidXml = $script:sampleXml -replace '<cbc:Name>Test Customer Ltd.</cbc:Name>', '<cbc:Name>987654</cbc:Name>'
-            $xmlDoc = [xml]$invalidXml
-            $result = Test-InvoiceBusinessRules -xmlDoc $xmlDoc
-            $result | Should -Be $false
+            Test-InvoiceTotals -xmlDoc $xml | Should -Be $ExpectTotals
+            Test-InvoiceBusinessRules -xmlDoc $xml | Should -Be $ExpectRules
         }
     }
 
@@ -77,7 +60,8 @@ Describe 'Invoice Processing Logic' {
         
         It "should process a valid invoice correctly" {
             # Arrange
-            $script:mockInvoices = @([PSCustomObject]@{ id = 1; peppol_xml = $script:sampleXml })
+            $validXml = Get-Content (Join-Path $script:sampleDataPath "valid.xml") -Raw
+            $script:mockInvoices = @([PSCustomObject]@{ id = 1; peppol_xml = $validXml })
             
             # Act - Simulate one loop iteration
             # This is a simplified test; proper testing would require refactoring the main script's loop
@@ -102,8 +86,8 @@ Describe 'Invoice Processing Logic' {
 
         It "should catch a validation error" {
             # Arrange
-            $invalidXml = $script:sampleXml -replace '<cbc:LineExtensionAmount currencyID="EUR">150.00</cbc:LineExtensionAmount>', '<cbc:LineExtensionAmount currencyID="EUR">149.99</cbc:LineExtensionAmount>'
-            $script:mockInvoices = @([PSCustomObject]@{ id = 2; peppol_xml = $invalidXml })
+            $invalidXmlContent = Get-Content (Join-Path $script:sampleDataPath "invalid-totals.xml") -Raw
+            $script:mockInvoices = @([PSCustomObject]@{ id = 2; peppol_xml = $invalidXmlContent })
 
             # Act
             $invoice = $script:mockInvoices[0]

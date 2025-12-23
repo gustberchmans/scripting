@@ -38,3 +38,8 @@ foreach ($name in $packages.Keys) {
 }
 
 Write-Host "iText dependencies installed to $libPath"
+
+# Install Pester module for testing
+Write-Host "Installing Pester module..."
+Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+Install-Module -Name Pester -Force -SkipPublisherCheck -Scope AllUsers

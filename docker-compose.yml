@@ -10,6 +10,10 @@ services:
       - DB_DATABASE=${DB_DATABASE}
     volumes:
       - ./output:/app/output
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./templates:/app/templates
+      - ./sample_data:/app/sample_data
     depends_on:
       db:
         condition: service_healthy
