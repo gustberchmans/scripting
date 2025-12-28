@@ -27,6 +27,7 @@ $pollingIntervalSeconds = 5
 # Dependencies (SimplySql, iText) are installed via Dockerfile.
 
 # --- Function Definitions ---
+# --- Main Processing Loop ---
 
 function Update-InvoiceStatus {
     param($invoiceId, $status, $errorMessage = $null)
@@ -42,6 +43,8 @@ function Update-InvoiceStatus {
     
     Invoke-SqlUpdate -Query $query -ConnectionName $connectionName -ErrorAction Stop
 }
+# Import Custom Module
+Import-Module "$PSScriptRoot/PeppolProcessor.psd1" -Force
 
 function Transform-XmlToHtml {
     param(
@@ -274,6 +277,7 @@ function Test-AuthToken {
 # --- Main Processing Loop ---
 
 # Load iText Dependencies
+# Initialize Libraries
 try {
     $libPath = "/app/lib"
     $dlls = @(
@@ -296,6 +300,7 @@ try {
     )
     foreach ($dll in $dlls) { Add-Type -Path (Join-Path $libPath $dll) }
     [System.Text.Encoding]::RegisterProvider([System.Text.CodePagesEncodingProvider]::Instance)
+    Initialize-PeppolPdfLibrary -LibPath "/app/lib"
 } catch {
     Write-Host "FATAL: Could not load iText dependencies. Error: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
@@ -363,6 +368,7 @@ Start-Sleep -Seconds 15 # Give the database time to initialize
 try {
     Import-Module SimplySql
     Connect-Database
+    Connect-Database -Server $dbHost -User $dbUser -Password $dbPassword -Database $dbDatabase -ConnectionName $connectionName
 }
 catch {
     Write-Host "FATAL: Could not connect to the database. Error: $($_.Exception.Message)" -ForegroundColor Red
@@ -384,7 +390,7 @@ while ($true) {
     }
     catch {
         Write-Host "Error querying database: $($_.Exception.Message). Attempting reconnection..." -ForegroundColor Yellow
-        try { Connect-Database } catch { Write-Host "Reconnection failed: $($_.Exception.Message)" }
+        try { Connect-Database -Server $dbHost -User $dbUser -Password $dbPassword -Database $dbDatabase -ConnectionName $connectionName } catch { Write-Host "Reconnection failed: $($_.Exception.Message)" }
         Start-Sleep -Seconds $pollingIntervalSeconds
         continue
     }
@@ -407,7 +413,7 @@ while ($true) {
             }
 
             # 2. Set status to 'processing'
-            Update-InvoiceStatus -invoiceId $invoiceId -status 'processing'
+            Update-InvoiceStatus -InvoiceId $invoiceId -Status 'processing' -ConnectionName $connectionName
 
             # 3. Transform XML to HTML
             $htmlContent = Transform-XmlToHtml -xmlContent $invoice.peppol_xml -xsltPath $xsltPath
@@ -423,12 +429,12 @@ while ($true) {
             Write-Host "Successfully generated PDF: $pdfPath"
 
             # 5. Set status to 'processed'
-            Update-InvoiceStatus -invoiceId $invoiceId -status 'processed'
+            Update-InvoiceStatus -InvoiceId $invoiceId -Status 'processed' -ConnectionName $connectionName
         }
         catch {
             $errorMessage = "Failed to process invoice ID $invoiceId. Error: $($_.Exception.Message)"
             Write-Host $errorMessage -ForegroundColor Red
-            Update-InvoiceStatus -invoiceId $invoiceId -status 'error' -errorMessage $errorMessage
+            Update-InvoiceStatus -InvoiceId $invoiceId -Status 'error' -ErrorMessage $errorMessage -ConnectionName $connectionName
         }
     }
     

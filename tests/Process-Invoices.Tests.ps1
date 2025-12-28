@@ -2,7 +2,6 @@
 # Mocks must be defined before the tested script is dot-sourced.
 BeforeAll {
     # Mock database and other external cmdlets
-    Mock -CommandName 'Import-Module' -MockWith { }
     Mock -CommandName 'Add-Type' -MockWith { }
     Mock -CommandName 'Open-MySqlConnection' -MockWith { return $true }
     Mock -CommandName 'Invoke-SqlQuery' -MockWith { return $script:mockInvoices }
@@ -10,14 +9,13 @@ BeforeAll {
     Mock -CommandName 'Start-Sleep'
     Mock -CommandName 'Write-Host'
 
-    # Dot-source the script to make its functions available.
-    # The main loop is problematic for testing, so we test the functions directly.
-    . "$PSScriptRoot/../src/Process-Invoices.ps1"
+    # Import the module to make functions available for testing
+    Import-Module "$PSScriptRoot/../src/PeppolProcessor.psd1" -Force
 
     # Mock script functions AFTER dot-sourcing to override them
     Mock -CommandName 'Update-InvoiceStatus' -MockWith {
-        param($invoiceId, $status, $errorMessage)
-        $call = [PSCustomObject]@{ InvoiceId = $invoiceId; Status = $status; ErrorMessage = $errorMessage }
+        param($InvoiceId, $Status, $ErrorMessage, $ConnectionName)
+        $call = [PSCustomObject]@{ InvoiceId = $InvoiceId; Status = $Status; ErrorMessage = $ErrorMessage }
         $script:updateStatusCalls.Add($call) | Out-Null
     }
     Mock -CommandName 'Convert-HtmlToPdf'
@@ -88,10 +86,10 @@ Describe 'Invoice Processing Logic' {
                 if (-not (Test-InvoiceTotals -xmlDoc $xmlDoc)) {
                     throw "Validation failed"
                 }
-                Update-InvoiceStatus -invoiceId $invoice.id -status 'processing'
+                Update-InvoiceStatus -InvoiceId $invoice.id -Status 'processing'
                 $html = Transform-XmlToHtml -xmlContent $invoice.peppol_xml -xsltPath "$PSScriptRoot/../templates/invoice-transform.xslt"
                 Convert-HtmlToPdf -htmlContent $html -outputPath "test.pdf" -baseUri "/tmp"
-                Update-InvoiceStatus -invoiceId $invoice.id -status 'processed'
+                Update-InvoiceStatus -InvoiceId $invoice.id -Status 'processed'
             } catch {}
 
             # Assert
@@ -114,7 +112,7 @@ Describe 'Invoice Processing Logic' {
                 }
                 # ... rest of processing which should not be reached
             } catch {
-                 Update-InvoiceStatus -invoiceId $invoice.id -status 'error' -errorMessage $_.Exception.Message
+                 Update-InvoiceStatus -InvoiceId $invoice.id -Status 'error' -ErrorMessage $_.Exception.Message
             }
 
             # Assert

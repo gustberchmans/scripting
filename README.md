@@ -146,8 +146,13 @@ Deze testaanpak zorgt ervoor dat het project later makkelijker uitbreidbaar en b
 - https://risedocs.fairsketch.com/doc/view/164-peppol-ubl-invoice-2-1-bis-billing-3-0-e-invoice-template
 
 ## Cmd's to run
+Clean start:
 ```
     docker-compose down -v && docker-compose up --build
+```
+Else:
+```
+    docker-compose up --build
 ```
 Run tests:
 ```
