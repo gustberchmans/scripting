@@ -81,14 +81,41 @@ function Test-InvoiceTotals {
     $declaredTotal = [decimal]$declaredTotalNode.'#text'
     
     # Calculate the sum of all invoice lines
-    $lineItems = $xmlDoc.SelectNodes("//cac:InvoiceLine/cbc:LineExtensionAmount", $ns)
+    $lineItems = $xmlDoc.SelectNodes("//cac:InvoiceLine", $ns)
     $calculatedTotal = 0.0
+
     foreach ($item in $lineItems) {
-        $calculatedTotal += [decimal]$item.'#text'
+        $lineAmount = [decimal]$item.SelectSingleNode("cbc:LineExtensionAmount", $ns).'#text'
+        $quantity   = [decimal]$item.SelectSingleNode("cbc:InvoicedQuantity", $ns).'#text'
+        $price      = [decimal]$item.SelectSingleNode("cac:Price/cbc:PriceAmount", $ns).'#text'
+        
+        if ([math]::Round($quantity * $price, 2) -ne $lineAmount) {
+            Write-Host "Validation Error: Line math incorrect. $quantity * $price != $lineAmount"
+            return $false
+        }
+        $calculatedTotal += $lineAmount
     }
     
     Write-Host "Validation: Declared Total = $declaredTotal, Calculated Total = $calculatedTotal"
     
+    # Check: LineExtension - Allowance + Charge = TaxExclusive
+    $taxExclusiveNode = $xmlDoc.SelectSingleNode("//cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount", $ns)
+    $allowanceNode = $xmlDoc.SelectSingleNode("//cac:LegalMonetaryTotal/cbc:AllowanceTotalAmount", $ns)
+    $chargeNode = $xmlDoc.SelectSingleNode("//cac:LegalMonetaryTotal/cbc:ChargeTotalAmount", $ns)
+
+    if ($taxExclusiveNode) {
+        $taxExclusive = [decimal]$taxExclusiveNode.'#text'
+        $allowance = if ($allowanceNode) { [decimal]$allowanceNode.'#text' } else { 0 }
+        $charge = if ($chargeNode) { [decimal]$chargeNode.'#text' } else { 0 }
+        
+        $expectedExclusive = $declaredTotal - $allowance + $charge
+        
+        if ($taxExclusive -ne $expectedExclusive) {
+             Write-Host "Validation Error: Tax Exclusive Amount mismatch. LineExtension ($declaredTotal) - Allowance ($allowance) + Charge ($charge) != TaxExclusive ($taxExclusive)"
+             return $false
+        }
+    }
+
     # Compare the totals
     return $declaredTotal -eq $calculatedTotal
 }
@@ -127,6 +154,67 @@ function Test-InvoiceBusinessRules {
     if ($customerName.'#text' -match '^\d+$') {
         Write-Host "Validation Error: Customer Name '$($customerName.'#text')' cannot be purely numeric."
         return $false
+    }
+
+    return $true
+}
+
+function Test-InvoiceVat {
+    param(
+        [xml]$xmlDoc
+    )
+    
+    if (-not $xmlDoc) { return $false }
+
+    $ns = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
+    $ns.AddNamespace('cac', 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2')
+    $ns.AddNamespace('cbc', 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2')
+
+    $subtotals = $xmlDoc.SelectNodes("//cac:TaxTotal/cac:TaxSubtotal", $ns)
+    $totalTaxableBase = 0.0
+    $totalTaxAmount = 0.0
+
+    foreach ($subtotal in $subtotals) {
+        $taxable = [decimal]$subtotal.SelectSingleNode("cbc:TaxableAmount", $ns).'#text'
+        $taxAmount = [decimal]$subtotal.SelectSingleNode("cbc:TaxAmount", $ns).'#text'
+        $percent = [decimal]$subtotal.SelectSingleNode("cac:TaxCategory/cbc:Percent", $ns).'#text'
+        $totalTaxableBase += $taxable
+        $totalTaxAmount += $taxAmount
+
+        $calculatedTax = [math]::Round($taxable * ($percent / 100), 2)
+
+        if ($calculatedTax -ne $taxAmount) {
+            Write-Host "Validation Error: VAT mismatch. Taxable: $taxable, Percent: $percent, Declared: $taxAmount, Calculated: $calculatedTax"
+            return $false
+        }
+    }
+
+    # Check: Compare Sum of TaxableAmounts with LegalMonetaryTotal/TaxExclusiveAmount
+    $taxExclusiveNode = $xmlDoc.SelectSingleNode("//cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount", $ns)
+    if ($taxExclusiveNode) {
+        $declaredTaxExclusive = [decimal]$taxExclusiveNode.'#text'
+        if ($declaredTaxExclusive -ne $totalTaxableBase) {
+            Write-Host "Validation Error: Taxable Base Mismatch. LegalMonetaryTotal/TaxExclusiveAmount ($declaredTaxExclusive) does not match sum of TaxSubtotal/TaxableAmount ($totalTaxableBase)."
+            return $false
+        }
+
+        # Check: TaxExclusive + Tax = TaxInclusive
+        $taxInclusiveNode = $xmlDoc.SelectSingleNode("//cac:LegalMonetaryTotal/cbc:TaxInclusiveAmount", $ns)
+        if ($taxInclusiveNode) {
+            $declaredTaxInclusive = [decimal]$taxInclusiveNode.'#text'
+            $calculatedInclusive = $declaredTaxExclusive + $totalTaxAmount
+            if ($declaredTaxInclusive -ne $calculatedInclusive) {
+                Write-Host "Validation Error: Total Mismatch. Exclusive ($declaredTaxExclusive) + Tax ($totalTaxAmount) != Inclusive ($declaredTaxInclusive)"
+                return $false
+            }
+            
+            # Check: TaxInclusive = Payable (assuming no prepaid/charges for this scope)
+            $payableNode = $xmlDoc.SelectSingleNode("//cac:LegalMonetaryTotal/cbc:PayableAmount", $ns)
+            if ($payableNode -and ([decimal]$payableNode.'#text' -ne $declaredTaxInclusive)) {
+                Write-Host "Validation Error: Payable Amount mismatch."
+                return $false
+            }
+        }
     }
 
     return $true
@@ -285,6 +373,9 @@ while ($true) {
             }
             if (-not (Test-InvoiceBusinessRules -xmlDoc $xmlDoc)) {
                 throw "Validation failed: Business rules check (names, formats) failed."
+            }
+            if (-not (Test-InvoiceVat -xmlDoc $xmlDoc)) {
+                throw "Validation failed: VAT calculation is incorrect."
             }
 
             # 2. Set status to 'processing'

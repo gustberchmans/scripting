@@ -36,13 +36,26 @@ Describe 'Invoice Processing Logic' {
 
     Context "Data Driven Tests (Sample Files)" {
         $testCases = @(
-            @{ Name="Valid Invoice"; File="valid.xml"; ExpectTotals=$true; ExpectRules=$true }
-            @{ Name="Invalid Totals"; File="invalid-totals.xml"; ExpectTotals=$false; ExpectRules=$true }
-            @{ Name="Invalid Business Rules"; File="invalid-business-rules.xml"; ExpectTotals=$true; ExpectRules=$false }
+            @{ Name="Valid Invoice"; File="valid.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Totals"; File="invalid-totals.xml"; ExpectTotals=$false; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Business Rules"; File="invalid-business-rules.xml"; ExpectTotals=$true; ExpectRules=$false; ExpectVat=$true }
+            @{ Name="Valid VAT"; File="valid-vat.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid VAT"; File="invalid-vat.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$false }
+            @{ Name="Invalid Taxable Mismatch"; File="invalid-taxable-mismatch.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$false }
+            @{ Name="Valid Complex (Multi-Line/Rate)"; File="valid-complex.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Valid Quantity Change (5x20)"; File="valid-quantity.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Valid Multi-Line (Same Rate)"; File="valid-multi-line.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Valid Low VAT (9%)"; File="valid-low-vat.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Quantity Math"; File="invalid-quantity.xml"; ExpectTotals=$false; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Multi-Line Sum"; File="invalid-multi-line.xml"; ExpectTotals=$false; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Low VAT Math"; File="invalid-low-vat.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$false }
+            @{ Name="Invalid Missing Date"; File="invalid-missing-date.xml"; ExpectTotals=$true; ExpectRules=$false; ExpectVat=$true }
+            @{ Name="Valid Allowance (Discount)"; File="valid-allowance.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Allowance Math"; File="invalid-allowance.xml"; ExpectTotals=$false; ExpectRules=$true; ExpectVat=$true }
         )
 
         It "Validation checks for <Name>" -TestCases $testCases {
-            param($Name, $File, $ExpectTotals, $ExpectRules)
+            param($Name, $File, $ExpectTotals, $ExpectRules, $ExpectVat)
             
             $path = Join-Path $script:sampleDataPath $File
             $content = Get-Content $path -Raw
@@ -50,6 +63,7 @@ Describe 'Invoice Processing Logic' {
 
             Test-InvoiceTotals -xmlDoc $xml | Should -Be $ExpectTotals
             Test-InvoiceBusinessRules -xmlDoc $xml | Should -Be $ExpectRules
+            Test-InvoiceVat -xmlDoc $xml | Should -Be $ExpectVat
         }
     }
 
@@ -104,7 +118,7 @@ Describe 'Invoice Processing Logic' {
             # Assert
             $script:updateStatusCalls.Count | Should -Be 1
             $script:updateStatusCalls[0].Status | Should -Be 'error'
-            $script:updateStatusCalls[0].ErrorMessage | Should -Contain 'Validation failed'
+            $script:updateStatusCalls[0].ErrorMessage | Should -Match 'Validation failed'
         }
     }
 }
