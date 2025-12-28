@@ -156,7 +156,6 @@ function Test-InvoiceTotals {
         $price      = [decimal]$item.SelectSingleNode("cac:Price/cbc:PriceAmount", $ns).'#text'
         
         if ([math]::Round($quantity * $price, 2) -ne $lineAmount) {
-            Write-Host "Validation Error: Line math incorrect. $quantity * $price != $lineAmount"
             return $false
         }
         $calculatedTotal += $lineAmount
@@ -175,7 +174,6 @@ function Test-InvoiceTotals {
         $expectedExclusive = $declaredTotal - $allowance + $charge
         
         if ($taxExclusive -ne $expectedExclusive) {
-             Write-Host "Validation Error: Tax Exclusive Amount mismatch. LineExtension ($declaredTotal) - Allowance ($allowance) + Charge ($charge) != TaxExclusive ($taxExclusive)"
              return $false
         }
     }
@@ -193,17 +191,14 @@ function Test-InvoiceBusinessRules {
     $supplierName = $XmlDoc.SelectSingleNode("//cac:AccountingSupplierParty/cac:Party/cac:PartyName/cbc:Name", $ns)
     if (-not $supplierName -or [string]::IsNullOrWhiteSpace($supplierName.'#text')) { return $false }
     if ($supplierName.'#text' -match '^\d+$') {
-        Write-Host "Validation Error: Supplier Name '$($supplierName.'#text')' cannot be purely numeric."
         return $false
     }
 
     $customerName = $XmlDoc.SelectSingleNode("//cac:AccountingCustomerParty/cac:Party/cac:PartyName/cbc:Name", $ns)
     if (-not $customerName -or [string]::IsNullOrWhiteSpace($customerName.'#text')) {
-        Write-Host "Validation Error: Customer Name is missing or empty."
         return $false
     }
     if ($customerName.'#text' -match '^\d+$') {
-        Write-Host "Validation Error: Customer Name '$($customerName.'#text')' cannot be purely numeric."
         return $false
     }
     
@@ -217,7 +212,6 @@ function Test-InvoiceBusinessRules {
         $lineAmounts = $XmlDoc.SelectNodes("//cac:InvoiceLine/cbc:LineExtensionAmount", $ns)
         foreach ($amt in $lineAmounts) {
             if ($amt.HasAttribute("currencyID") -and $amt.GetAttribute("currencyID") -ne $docCurrency) {
-                 Write-Host "Validation Error: Currency mismatch. Document: $docCurrency, Line: $($amt.GetAttribute('currencyID'))"
                  return $false
             }
         }
@@ -230,7 +224,6 @@ function Test-InvoiceBusinessRules {
         if ($quantityNode) {
             $quantity = [decimal]$quantityNode.'#text'
             if ($quantity -lt 0) {
-                Write-Host "Validation Error: Item Quantity cannot be negative ($quantity)."
                 return $false
             }
         }
@@ -239,7 +232,6 @@ function Test-InvoiceBusinessRules {
         if ($priceNode) {
             $price = [decimal]$priceNode.'#text'
             if ($price -lt 0) {
-                Write-Host "Validation Error: Item Price cannot be negative ($price)."
                 return $false
             }
         }
@@ -270,7 +262,6 @@ function Test-InvoiceVat {
         $calculatedTax = [math]::Round($taxable * ($percent / 100), 2)
 
         if ($calculatedTax -ne $taxAmount) {
-            Write-Host "Validation Error: VAT mismatch. Taxable: $taxable, Percent: $percent, Declared: $taxAmount, Calculated: $calculatedTax"
             return $false
         }
     }
@@ -280,7 +271,6 @@ function Test-InvoiceVat {
     if ($taxExclusiveNode) {
         $declaredTaxExclusive = [decimal]$taxExclusiveNode.'#text'
         if ($declaredTaxExclusive -ne $totalTaxableBase) {
-            Write-Host "Validation Error: Taxable Base Mismatch. LegalMonetaryTotal/TaxExclusiveAmount ($declaredTaxExclusive) does not match sum of TaxSubtotal/TaxableAmount ($totalTaxableBase)."
             return $false
         }
 
@@ -290,14 +280,12 @@ function Test-InvoiceVat {
             $declaredTaxInclusive = [decimal]$taxInclusiveNode.'#text'
             $calculatedInclusive = $declaredTaxExclusive + $totalTaxAmount
             if ($declaredTaxInclusive -ne $calculatedInclusive) {
-                Write-Host "Validation Error: Total Mismatch. Exclusive ($declaredTaxExclusive) + Tax ($totalTaxAmount) != Inclusive ($declaredTaxInclusive)"
                 return $false
             }
             
             # Check: TaxInclusive = Payable (assuming no prepaid/charges for this scope)
             $payableNode = $XmlDoc.SelectSingleNode("//cac:LegalMonetaryTotal/cbc:PayableAmount", $ns)
             if ($payableNode -and ([decimal]$payableNode.'#text' -ne $declaredTaxInclusive)) {
-                Write-Host "Validation Error: Payable Amount mismatch."
                 return $false
             }
         }

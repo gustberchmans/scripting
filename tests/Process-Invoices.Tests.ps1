@@ -12,7 +12,7 @@ BeforeAll {
     # Import the module to make functions available for testing
     Import-Module "$PSScriptRoot/../src/PeppolProcessor.psd1" -Force
 
-    # Mock script functions AFTER dot-sourcing to override them
+    # Mock module functions to override them
     Mock -CommandName 'Update-InvoiceStatus' -MockWith {
         param($InvoiceId, $Status, $ErrorMessage, $ConnectionName)
         $call = [PSCustomObject]@{ InvoiceId = $InvoiceId; Status = $Status; ErrorMessage = $ErrorMessage }

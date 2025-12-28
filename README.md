@@ -1,152 +1,74 @@
 # Automatisering van Peppol-factuurverwerking met MySQL, Docker en PowerShell
 
-## 1. Introductie
-Voor mijn werkstuk wil ik een systeem bouwen dat Peppol-XML-facturen automatisch verwerkt.
-Het idee is om een workflow te maken waarin:
-- MySQL nieuwe factuurrecords herkent,
-- een Docker-container met PowerShell de gegevens verwerkt,
-- en er uiteindelijk een PDF wordt gemaakt volgens een vaste template.
+## 1. Introductie & Handleiding
+Dit project is een volledig geautomatiseerd systeem voor het verwerken van Peppol-XML-facturen. Het systeem monitort een MySQL-database op nieuwe facturen, valideert de gegevens volgens strikte bedrijfsregels, en genereert automatisch een PDF-document op basis van een XSLT-template.
 
-Deze aanpak combineert databanken, automatisering, scripting en best practices.
-In dit voorstel leg ik uit wat ik wil bouwen en hoe mijn project zal voldoen aan alle beoordelingscriteria.
+### Functionaliteiten
+*   **Factuurherkenning:** Automatische detectie van nieuwe records in de database.
+*   **Validatie:** Controle op totalen, BTW-berekeningen en bedrijfsregels (bv. geen negatieve prijzen).
+*   **Transformatie:** Omzetting van UBL XML naar HTML via XSLT.
+*   **PDF Generatie:** Conversie van HTML naar PDF met behulp van iText 7.
+*   **Rapportage:** Ingebouwde module voor statusrapporten (HTML).
+*   **Cloud Integratie:** Simulatie van upload naar externe opslag.
 
-## 2. Analyse
-### 2.1 Situatieschets
-Peppol-facturen worden normaal als XML geleverd. Zonder automatisatie moeten deze manueel omgezet of gecontroleerd worden.
-Dat is traag, foutgevoelig en moeilijk op te schalen.
-Mijn project richt zich daarom op het analyseren van deze huidige manier van werken en het identificeren van punten die ik wil verbeteren.
+## 2. Architectuur
+Het systeem bestaat uit drie hoofdcomponenten die samenwerken in een Docker-omgeving:
 
-### 2.2 SWOT-analyse
-**Sterktes**
-- Ik heb al ervaring met MySQL en Docker, waardoor ik vlot kan starten.
-- Peppol gebruikt gestandaardiseerde XML, wat helpt bij de verwerking.
-- De workflow kan bijna volledig geautomatiseerd worden.
+1.  **MySQL Database:**
+    *   Slaat factuurdata op in de tabel `invoices`.
+    *   Gebruikt triggers voor audit logging in `invoice_audit`.
+2.  **PowerShell Container (App):**
+    *   Draait het hoofdscript `Process-Invoices.ps1` in een loop.
+    *   Gebruikt de custom module `PeppolProcessor` voor logica.
+3.  **Output Volume:**
+    *   Gegenereerde PDF's worden opgeslagen in de gedeelde map `output/`.
 
-**Zwaktes**
-- De combinatie MySQL + Docker + PowerShell maakt de omgeving complexer.
-- Het systeem hangt af van de beschikbaarheid van de Docker-container.
+## 3. Installatie & Gebruik (Getting Started)
 
-**Kansen**
-- Door strengere Europese regels rond e-facturatie is dit een actueel en nuttig project.
-- Het ontwerp biedt mogelijkheden om later functies toe te voegen, zoals rapportage of een webinterface.
+### Vereisten
+*   Docker & Docker Compose
+*   PowerShell Core (optioneel, voor lokale helper scripts)
 
-**Bedreigingen**
-- Onjuiste verwerking kan leiden tot compliance-problemen.
-- Beveiliging moet zorgvuldig uitgewerkt worden om datalekken te vermijden.
+### Starten
+1.  Bouw en start de containers:
+    ```bash
+    docker-compose up --build
+    ```
+2.  Het systeem wacht automatisch tot de database beschikbaar is en begint dan met pollen.
 
-Deze analyse toont waarom een gecontroleerde en betrouwbare automatisering nodig is.
+### Testdata Invoeren
+Gebruik het helper script om voorbeeld-facturen (zowel valide als invalide) in de database te laden:
+```bash
+pwsh ./src/Insert-SampleData.ps1
+```
 
-## 3. Design
-### 3.1 Doel van het ontwerp
-Tijdens de ontwerpfase wil ik verschillende technologieën vergelijken en motiveren waarom ik een bepaalde oplossing kies.
+### Resultaten Bekijken
+*   **PDF's:** Controleer de map `output/` op uw host machine.
+*   **Rapportage:** Genereer een statusrapport met het volgende commando:
+    ```bash
+    docker-compose exec app pwsh /app/src/Get-Report.ps1
+    ```
+    Open vervolgens `output/status_report.html` in uw browser.
 
-### 3.2 Mogelijke onderdelen van de oplossing
-Ik zal onderzoeken of de volgende elementen geschikt zijn:
-- MySQL-triggers die automatisch reageren op nieuwe factuurobjecten
-- Een Docker-container waarin PowerShell draait
-- PowerShell-scripts voor parsing, validatie en PDF-generatie
-- XSLT-transformatie om XML naar HTML om te zetten
-- iTextSharp om HTML naar een PDF te converteren
+## 4. Ontwikkeling & Testing
 
-### 3.3 Creativiteit
-Het systeem dat ik voorstel moet:
-- automatisch reageren op nieuwe databank-events,
-- gebruikmaken van herbruikbare templates,
-- en ontworpen zijn zodat uitbreidingen later eenvoudig blijven.
+### Structuur
+*   `src/PeppolProcessor.psm1`: Bevat alle kernfuncties (Validatie, DB connectie, PDF conversie).
+*   `src/Process-Invoices.ps1`: Het "Controller" script dat de loop draait.
+*   `templates/`: Bevat de XSLT transformatie regels.
 
-### 3.4 Minimum Viable Product (MVP)
-De MVP definieert de minimale set van functies die absoluut noodzakelijk zijn om aan te tonen dat de kern van de voorgestelde oplossing werkt en het oorspronkelijke probleem oplost. Dit is de scope waar ik me in eerste instantie op zal focussen om de haalbaarheid van het project te garanderen.
-
-De MVP omvat de volgende functionaliteiten:
-- **Factuurherkenning:** Een MySQL-tabelstructuur die in staat is om de essentiële factuurdata van één gespecificeerd Peppol-factuurtype op te slaan (bijv. UBL-CIUS-NL).
-- **Trigger en Event-Handling:** Een werkende MySQL-trigger die een event of record aanmaakt of markeert zodra een nieuw factuurrecord is ingevoegd.
-- **Gegevensverwerking:** Een Docker-container met een werkend PowerShell-script dat periodiek (of op basis van het event) factuurdata uit de MySQL-database leest.
-- **Transformatie:** Het PowerShell-script voert XSLT-transformatie uit op een gesimuleerde XML-input of de data uit de database om deze om te zetten naar een eenvoudig HTML-formaat.
-- **Documentgeneratie:** Het systeem gebruikt een module (zoals iTextSharp) om de gegenereerde HTML om te zetten naar een statische PDF op basis van een eenvoudige, vaste template.
-- **Logging en Foutafhandeling:** Basis logging van een geslaagde verwerking en de afhandeling van één kritieke fout (bijv. factuurdata ontbreekt).
-
-Dit MVP-systeem toont de volledige geautomatiseerde keten: Database (Trigger) → PowerShell/Docker (Verwerking) → PDF (Output).
-
-### 3.5 Toekomstige Uitbreidingen (Future Scope)
-Na succesvolle implementatie en validatie van de MVP, kunnen de volgende functies als mogelijke extra's worden toegevoegd. Deze zullen in volgorde van relevantie worden aangepakt, indien de beschikbare tijd dit toelaat.
-- **Uitgebreide Foutafhandeling:** Implementatie van een robuustere foutafhandeling, inclusief het tijdelijk opslaan van niet-verwerkte facturen (Error-queue of Retry-tabel) en de mogelijkheid tot e-mailnotificaties bij kritieke fouten (zoals vermeld in sectie 5 en 6).
-- **Ondersteuning voor Meerdere Factuurtypes:** Het uitbreiden van de logica om meerdere Peppol-standaarden of XML-schema's te valideren en verwerken.
-- **Geavanceerde Validatie:** Implementatie van diepgaande datavalidatie (bijv. controleren of totaalbedrag = som van regels) om de robuustheid (sectie 6) te verhogen.
-- **Integratie met Cloud-Platformen:** Onderzoek naar het uploaden van de gegenereerde PDF naar een externe service (bijv. OneDrive, SharePoint of een ERP-systeem) om de workflow te finaliseren.
-- **Visuele Interface/Rapportage:** Het toevoegen van een eenvoudige webinterface of een Powershell rapportagemodule om de status van de verwerkte en in de wachtrij staande facturen te visualiseren (zoals vermeld in de Kansen in de SWOT-analyse).
-
-## 4. Kennisverwerving
-In dit onderdeel beschrijf ik hoe ik de nodige kennis zal opbouwen.
-Dat omvat:
-- PowerShell scripting en modules
-- De werking van Docker-containers
-- XML-analyse en XSLT-transformatie
-- MySQL triggers en event handling
-- Basisprincipes van security, zoals token-verificatie
-
-Ik geef aan welke documentatie, tutorials of bronnen ik hiervoor wil raadplegen.
-
-## 5. Usability
-Hoewel het project vooral backend-gericht is, wil ik het systeem toch gebruiksvriendelijk maken.
-Ik plan:
-- duidelijke logberichten,
-- heldere foutmeldingen,
-- overzichtelijke documentatie,
-- en eventueel e-mailmeldingen wanneer een verwerking geslaagd is of fouten bevat.
-
-Zo kan iemand anders het systeem ook eenvoudig gebruiken of onderhouden.
-
-## 6. Robustheid
-Het ontwerp besteedt veel aandacht aan stabiliteit en foutverwerking.
-Daarom voorzie ik:
-- Validatie van de XML-data
-- Uitgebreide foutafhandeling in PowerShell
-- Logging van alle belangrijke stappen
-- Mogelijkheid om facturen tijdelijk op te slaan wanneer de container offline is
-- Controles op geldigheid van de inkomende gegevens
-
-Zo wordt het uiteindelijke systeem betrouwbaar, ook wanneer er problemen zijn met input of omgeving.
-
-## 7. Uitbreidbaarheid
-Het systeem wordt modulair opgebouwd zodat er later eenvoudig nieuwe onderdelen toegevoegd kunnen worden.
-Mogelijke uitbreidingen zijn:
-- Nieuwe factuurtypes
-- Extra uitvoerformaten
-- Integratie met cloud-platformen
-- Een visuele interface
-- Nieuwe validatieregels
-
-Door dit vooraf mee te nemen in het ontwerp blijft de structuur overzichtelijk en toekomstgericht.
-
-## 8. Best Practices en Structuur
-Ik plan het project op te bouwen volgens bekende best practices:
-- PowerShell-conventies zoals Verb-Noun functienamen
-- Duidelijke mappenstructuur en scheiding van code, configuratie en logs
-- Gebruik van configuratiebestanden om instellingen flexibel te houden
-- Efficiënte Docker-opbouw zodat de container klein en snel blijft
-
-Dit bevordert leesbaarheid, onderhoudbaarheid en prestaties.
-
-## 9. Testing (Pester)
-Ik zal Pester gebruiken om unittests te schrijven zodra het systeem gebouwd wordt.
-In het voorstel beschrijf ik welke tests ik wil voorzien, onder andere:
-- Validatie van XML-input
-- Testen van XSLT-transformatie
-- Testen of PDF-generatie correct verloopt
-- Foutafhandeling
-- Token-verificatie
-- Simulaties van MySQL-triggers
-
-Deze testaanpak zorgt ervoor dat het project later makkelijker uitbreidbaar en beter controleerbaar wordt.
+### Tests Draaien
+Het project bevat uitgebreide Pester tests voor validatie en logica.
+```bash
+docker-compose exec app pwsh -c "Invoke-Pester /app/tests/Process-Invoices.Tests.ps1 -Output Detailed"
+```
 
 ---
 
-## Sources:
-- Gemini
-- https://risedocs.fairsketch.com/doc/view/164-peppol-ubl-invoice-2-1-bis-billing-3-0-e-invoice-template
+## Handmatige SQL Commando's (Optioneel)
+Indien u handmatig data wilt inspecteren of invoegen:
 
-## Cmd's to run
-Clean start:
+**Verbinden met de database:**
 ```
     docker-compose down -v && docker-compose up --build
 ```
