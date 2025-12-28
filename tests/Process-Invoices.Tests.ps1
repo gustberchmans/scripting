@@ -52,6 +52,8 @@ Describe 'Invoice Processing Logic' {
             @{ Name="Invalid Missing Date"; File="invalid-missing-date.xml"; ExpectTotals=$true; ExpectRules=$false; ExpectVat=$true }
             @{ Name="Valid Allowance (Discount)"; File="valid-allowance.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
             @{ Name="Invalid Allowance Math"; File="invalid-allowance.xml"; ExpectTotals=$false; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Currency Mismatch"; File="invalid-currency-mismatch.xml"; ExpectTotals=$true; ExpectRules=$false; ExpectVat=$true }
+            @{ Name="Valid Zero Amount (Free Item)"; File="valid-zero-amount.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
         )
 
         It "Validation checks for <Name>" -TestCases $testCases {

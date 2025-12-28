@@ -156,6 +156,26 @@ function Test-InvoiceBusinessRules {
         return $false
     }
 
+    # Validate Issue Date
+    $issueDate = $xmlDoc.SelectSingleNode("//cbc:IssueDate", $ns)
+    if (-not $issueDate -or [string]::IsNullOrWhiteSpace($issueDate.'#text')) {
+        Write-Host "Validation Error: Issue Date is missing."
+        return $false
+    }
+
+    # Validate Currency Consistency
+    $docCurrencyNode = $xmlDoc.SelectSingleNode("//cbc:DocumentCurrencyCode", $ns)
+    if ($docCurrencyNode) {
+        $docCurrency = $docCurrencyNode.'#text'
+        $lineAmounts = $xmlDoc.SelectNodes("//cac:InvoiceLine/cbc:LineExtensionAmount", $ns)
+        foreach ($amt in $lineAmounts) {
+            if ($amt.HasAttribute("currencyID") -and $amt.GetAttribute("currencyID") -ne $docCurrency) {
+                 Write-Host "Validation Error: Currency mismatch. Document: $docCurrency, Line: $($amt.GetAttribute('currencyID'))"
+                 return $false
+            }
+        }
+    }
+
     return $true
 }
 
