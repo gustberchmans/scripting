@@ -43,3 +43,7 @@ Write-Host "iText dependencies installed to $libPath"
 Write-Host "Installing Pester module..."
 Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
 Install-Module -Name Pester -Force -SkipPublisherCheck -Scope AllUsers
+
+# Install SimplySql module
+Write-Host "Installing SimplySql module..."
+Install-Module -Name SimplySql -Force -SkipPublisherCheck -Scope AllUsers

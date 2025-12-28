@@ -255,5 +255,5 @@ Add new invoice in database:
 ```
 See the failed invoices:
 ```
-SELECT id, status, error_message FROM invoices WHERE status = 'error';
+    docker-compose exec app pwsh /app/src/Get-Report.ps1
 ```
