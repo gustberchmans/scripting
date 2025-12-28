@@ -30,7 +30,12 @@
             <body>
                 <div class="header">
                     <div>
-                        <h1>INVOICE</h1>
+                        <xsl:choose>
+                            <xsl:when test="cbc:InvoiceTypeCode = '381'">
+                                <h1>CREDIT NOTE</h1>
+                            </xsl:when>
+                            <xsl:otherwise><h1>INVOICE</h1></xsl:otherwise>
+                        </xsl:choose>
                     </div>
                     <div style="text-align: right;">
                         <p><strong>Invoice #:</strong> <xsl:value-of select="cbc:ID"/></p>

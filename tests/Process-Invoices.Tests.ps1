@@ -52,6 +52,15 @@ Describe 'Invoice Processing Logic' {
             @{ Name="Invalid Allowance Math"; File="invalid-allowance.xml"; ExpectTotals=$false; ExpectRules=$true; ExpectVat=$true }
             @{ Name="Invalid Currency Mismatch"; File="invalid-currency-mismatch.xml"; ExpectTotals=$true; ExpectRules=$false; ExpectVat=$true }
             @{ Name="Valid Zero Amount (Free Item)"; File="valid-zero-amount.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Valid Credit Note"; File="credit-note.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Negative Price"; File="invalid-negative-price.xml"; ExpectTotals=$true; ExpectRules=$false; ExpectVat=$true }
+            @{ Name="Invalid Negative Quantity"; File="invalid-negative-quantity.xml"; ExpectTotals=$true; ExpectRules=$false; ExpectVat=$true }
+            @{ Name="Valid Zero Invoice"; File="valid-zero-invoice.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Negative Totals"; File="invalid-negative-totals.xml"; ExpectTotals=$false; ExpectRules=$false; ExpectVat=$true }
+            @{ Name="Invalid Zero Totals"; File="invalid-zero-totals.xml"; ExpectTotals=$false; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Valid Zero VAT"; File="valid-zero-vat.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$true }
+            @{ Name="Invalid Negative VAT"; File="invalid-negative-vat.xml"; ExpectTotals=$true; ExpectRules=$false; ExpectVat=$false }
+            @{ Name="Invalid Zero VAT"; File="invalid-zero-vat.xml"; ExpectTotals=$true; ExpectRules=$true; ExpectVat=$false }
         )
 
         It "Validation checks for <Name>" -TestCases $testCases {
@@ -87,7 +96,7 @@ Describe 'Invoice Processing Logic' {
                     throw "Validation failed"
                 }
                 Update-InvoiceStatus -InvoiceId $invoice.id -Status 'processing'
-                $html = Transform-XmlToHtml -xmlContent $invoice.peppol_xml -xsltPath "$PSScriptRoot/../templates/invoice-transform.xslt"
+                $html = ConvertTo-InvoiceHtml -XmlContent $invoice.peppol_xml -XsltPath "$PSScriptRoot/../templates/invoice-transform.xslt"
                 Convert-HtmlToPdf -htmlContent $html -outputPath "test.pdf" -baseUri "/tmp"
                 Update-InvoiceStatus -InvoiceId $invoice.id -Status 'processed'
             } catch {}
@@ -136,6 +145,19 @@ Describe 'Invoice Processing Logic' {
         It "should fail secure if no API_TOKEN is configured" {
             $env:API_TOKEN = ""
             Test-AuthToken -token "AnyToken" | Should -Be $false
+        }
+    }
+
+    Context "Cloud Integration" {
+        It "Publish-ToCloud should create directory and copy file" {
+            Mock -CommandName Test-Path -MockWith { return $false } -ModuleName 'PeppolProcessor'
+            Mock -CommandName New-Item -MockWith { } -ModuleName 'PeppolProcessor'
+            Mock -CommandName Copy-Item -MockWith { } -ModuleName 'PeppolProcessor'
+            
+            Publish-ToCloud -PdfPath "/app/output/test.pdf"
+            
+            Assert-MockCalled New-Item -Times 1 -ParameterFilter { $Path -match "cloud_sync" -and $ItemType -eq "Directory" } -ModuleName 'PeppolProcessor'
+            Assert-MockCalled Copy-Item -Times 1 -ParameterFilter { $Path -eq "/app/output/test.pdf" -and $Destination -match "cloud_sync" } -ModuleName 'PeppolProcessor'
         }
     }
 }

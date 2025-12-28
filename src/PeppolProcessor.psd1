@@ -7,11 +7,12 @@
         'Initialize-PeppolPdfLibrary',
         'Connect-Database',
         'Update-InvoiceStatus',
-        'Transform-XmlToHtml',
+        'ConvertTo-InvoiceHtml',
         'Convert-HtmlToPdf',
         'Test-InvoiceTotals',
         'Test-InvoiceBusinessRules',
         'Test-InvoiceVat',
-        'Test-AuthToken'
+        'Test-AuthToken',
+        'Publish-ToCloud'
     )
 }

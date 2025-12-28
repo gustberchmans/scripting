@@ -114,7 +114,7 @@ function Update-InvoiceStatus {
     Invoke-SqlUpdate -Query $query -ConnectionName $ConnectionName -ErrorAction Stop
 }
 
-function Transform-XmlToHtml {
+function ConvertTo-InvoiceHtml {
     param([string]$XmlContent, [string]$XsltPath)
     
     $xslt = New-Object System.Xml.Xsl.XslCompiledTransform;
@@ -223,6 +223,28 @@ function Test-InvoiceBusinessRules {
         }
     }
 
+    # Validate Non-Negative Values (Price and Quantity)
+    $lineItems = $XmlDoc.SelectNodes("//cac:InvoiceLine", $ns)
+    foreach ($item in $lineItems) {
+        $quantityNode = $item.SelectSingleNode("cbc:InvoicedQuantity", $ns)
+        if ($quantityNode) {
+            $quantity = [decimal]$quantityNode.'#text'
+            if ($quantity -lt 0) {
+                Write-Host "Validation Error: Item Quantity cannot be negative ($quantity)."
+                return $false
+            }
+        }
+
+        $priceNode = $item.SelectSingleNode("cac:Price/cbc:PriceAmount", $ns)
+        if ($priceNode) {
+            $price = [decimal]$priceNode.'#text'
+            if ($price -lt 0) {
+                Write-Host "Validation Error: Item Price cannot be negative ($price)."
+                return $false
+            }
+        }
+    }
+
     return $true
 }
 
@@ -289,6 +311,19 @@ function Test-AuthToken {
     $validToken = $env:API_TOKEN
     if ([string]::IsNullOrEmpty($validToken)) { return $false }
     return $Token -eq $validToken
+}
+
+function Publish-ToCloud {
+    param([string]$PdfPath)
+    
+    # Simulate uploading to a cloud folder (e.g., OneDrive/SharePoint sync folder)
+    $parentDir = Split-Path $PdfPath
+    $cloudDir = Join-Path $parentDir "cloud_sync"
+    
+    if (-not (Test-Path $cloudDir)) { New-Item -ItemType Directory -Path $cloudDir -Force | Out-Null }
+    
+    Copy-Item -Path $PdfPath -Destination $cloudDir -Force
+    Write-Host "   -> Uploaded to Cloud Storage (Simulated at $cloudDir)" -ForegroundColor Cyan
 }
 
 Export-ModuleMember -Function *
