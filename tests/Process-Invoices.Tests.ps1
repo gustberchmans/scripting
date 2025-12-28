@@ -123,4 +123,21 @@ Describe 'Invoice Processing Logic' {
             $script:updateStatusCalls[0].ErrorMessage | Should -Match 'Validation failed'
         }
     }
+
+    Context "Security / Token Verification" {
+        It "should accept a valid token" {
+            $env:API_TOKEN = "SuperSecret123"
+            Test-AuthToken -token "SuperSecret123" | Should -Be $true
+        }
+
+        It "should reject an invalid token" {
+            $env:API_TOKEN = "SuperSecret123"
+            Test-AuthToken -token "HackerToken" | Should -Be $false
+        }
+
+        It "should fail secure if no API_TOKEN is configured" {
+            $env:API_TOKEN = ""
+            Test-AuthToken -token "AnyToken" | Should -Be $false
+        }
+    }
 }

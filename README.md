@@ -149,6 +149,10 @@ Deze testaanpak zorgt ervoor dat het project later makkelijker uitbreidbaar en b
 ```
     docker-compose down -v && docker-compose up --build
 ```
+Run tests:
+```
+docker-compose exec app pwsh -c "Invoke-Pester /app/tests/Process-Invoices.Tests.ps1 -Output Detailed"
+```
 Add new invoice in database:
 ```
     docker exec -it v1-db-1 mysql -u root -p invoices_db

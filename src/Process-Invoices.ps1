@@ -255,6 +255,22 @@ function Convert-HtmlToPdf {
     $pdfDocument.Close()
 }
 
+function Test-AuthToken {
+    param(
+        [string]$token
+    )
+    
+    # Simulate checking a Bearer token against a secure environment variable
+    $validToken = $env:API_TOKEN
+    
+    if ([string]::IsNullOrEmpty($validToken)) {
+        Write-Host "Security Warning: API_TOKEN environment variable is not set."
+        return $false
+    }
+    
+    return $token -eq $validToken
+}
+
 # --- Main Processing Loop ---
 
 # Load iText Dependencies
