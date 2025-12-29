@@ -13,7 +13,7 @@ services:
       - ./src:/app/src
       - ./tests:/app/tests
       - ./templates:/app/templates
-      - ./sample_data:/app/sample_data
+      - ./data:/app/data
     depends_on:
       db:
         condition: service_healthy

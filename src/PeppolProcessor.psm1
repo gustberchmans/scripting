@@ -314,4 +314,206 @@ function Publish-ToCloud {
     Write-Host "   -> Uploaded to Cloud Storage (Simulated at $cloudDir)" -ForegroundColor Cyan
 }
 
+function Start-PeppolProcessor {
+    param(
+        [string]$DbHost = $env:DB_HOST,
+        [string]$DbUser = $env:DB_USER,
+        [string]$DbPassword = $env:DB_PASSWORD,
+        [string]$DbDatabase = $env:DB_DATABASE,
+        [string]$ConnectionName = "InvoicesDB",
+        [string]$LibPath = "/app/lib",
+        [string]$XsltPath = "/app/templates/invoice-transform.xslt",
+        [string]$OutputDir = "/app/output",
+        [int]$PollingIntervalSeconds = 5
+    )
+
+    # Initialize Libraries
+    Initialize-PeppolPdfLibrary -LibPath $LibPath
+
+    Write-Host "Invoice processing started. Waiting for database to be ready..."
+    Start-Sleep -Seconds 15 # Give the database time to initialize
+
+    try {
+        if (-not (Get-Module -Name SimplySql -ErrorAction SilentlyContinue)) {
+            Import-Module SimplySql -ErrorAction Stop
+        }
+        Connect-Database -Server $DbHost -User $DbUser -Password $DbPassword -Database $DbDatabase -ConnectionName $ConnectionName
+    }
+    catch {
+        Write-Host "FATAL: Could not connect to the database. Error: $($_.Exception.Message)" -ForegroundColor Red
+        return
+    }
+
+    Write-Host "Database connected. Starting polling loop (Interval: ${PollingIntervalSeconds}s)..." -ForegroundColor Cyan
+
+    while ($true) {
+        try {
+            # Check count first to avoid "No resultset" warning from SimplySql on empty SELECT
+            $countCheck = Invoke-SqlQuery -Query "SELECT COUNT(*) AS c FROM invoices WHERE status = 'new';" -ConnectionName $ConnectionName -ErrorAction Stop
+            
+            if ($countCheck.c -gt 0) {
+                $newInvoices = Invoke-SqlQuery -Query "SELECT id, peppol_xml FROM invoices WHERE status = 'new';" -ConnectionName $ConnectionName -ErrorAction Stop
+            } else {
+                $newInvoices = @()
+            }
+        }
+        catch {
+            Write-Host "Error querying database: $($_.Exception.Message). Attempting reconnection..." -ForegroundColor Yellow
+            try { Connect-Database -Server $DbHost -User $DbUser -Password $DbPassword -Database $DbDatabase -ConnectionName $ConnectionName } catch { Write-Host "Reconnection failed: $($_.Exception.Message)" }
+            Start-Sleep -Seconds $PollingIntervalSeconds
+            continue
+        }
+        
+        foreach ($invoice in $newInvoices) {
+            $invoiceId = $invoice.id
+            Write-Host "Processing invoice ID: $invoiceId"
+            
+            try {
+                # 1. Validate
+                $xmlDoc = [xml]$invoice.peppol_xml
+                if (-not (Test-InvoiceTotals -XmlDoc $xmlDoc)) { throw "Validation failed: Totals mismatch." }
+                if (-not (Test-InvoiceBusinessRules -XmlDoc $xmlDoc)) { throw "Validation failed: Business rules check failed." }
+                if (-not (Test-InvoiceVat -XmlDoc $xmlDoc)) { throw "Validation failed: VAT calculation incorrect." }
+
+                # 2. Status processing
+                Update-InvoiceStatus -InvoiceId $invoiceId -Status 'processing' -ConnectionName $ConnectionName
+
+                # 3. Transform
+                $htmlContent = ConvertTo-InvoiceHtml -XmlContent $invoice.peppol_xml -XsltPath $XsltPath
+                if (-not $htmlContent) { throw "Transformation to HTML failed." }
+
+                # 4. PDF
+                $pdfPath = Join-Path -Path $OutputDir -ChildPath "invoice-$($invoiceId)-$(Get-Date -Format 'yyyyMMddHHmmss').pdf"
+                Convert-HtmlToPdf -HtmlContent $htmlContent -OutputPath $pdfPath -BaseUri $OutputDir
+                Write-Host "Successfully generated PDF: $pdfPath"
+
+                # Cloud
+                Publish-ToCloud -PdfPath $pdfPath
+
+                # 5. Status processed
+                Update-InvoiceStatus -InvoiceId $invoiceId -Status 'processed' -ConnectionName $ConnectionName
+            }
+            catch {
+                $errorMessage = "Failed to process invoice ID $invoiceId. Error: $($_.Exception.Message)"
+                Write-Host $errorMessage -ForegroundColor Red
+                Update-InvoiceStatus -InvoiceId $invoiceId -Status 'error' -ErrorMessage $errorMessage -ConnectionName $ConnectionName
+            }
+        }
+        
+        if (-not $newInvoices) {
+            Write-Host "No new invoices found. Sleeping for $PollingIntervalSeconds seconds."
+            Start-Sleep -Seconds $PollingIntervalSeconds
+        }
+    }
+}
+
+function Import-PeppolData {
+    param(
+        [string]$SourcePath,
+        [string]$DbHost = "127.0.0.1",
+        [string]$DbUser = "root",
+        [string]$DbPassword = "",
+        [string]$DbDatabase = "invoices_db"
+    )
+
+    $connectionName = "InvoicesDB_Insert"
+
+    try {
+        if (-not (Get-Module -Name SimplySql -ErrorAction SilentlyContinue)) { Import-Module SimplySql -ErrorAction Stop }
+        
+        Write-Host "Connecting to database..."
+        $secPass = ConvertTo-SecureString $DbPassword -AsPlainText -Force
+        $cred = New-Object System.Management.Automation.PSCredential($DbUser, $secPass)
+        Open-MySqlConnection -Server $DbHost -Credential $cred -ConnectionName $connectionName -Database $DbDatabase -ErrorAction Stop
+
+        if (Test-Path $SourcePath -PathType Leaf) {
+            $files = @(Get-Item $SourcePath)
+        } else {
+            $files = Get-ChildItem -Path $SourcePath -Filter "*.xml"
+        }
+        
+        foreach ($file in $files) {
+            Write-Host "Inserting $($file.Name)..." -NoNewline
+            $xmlContent = Get-Content $file.FullName -Raw
+            $safeXml = $xmlContent.Replace("'", "''")
+            $query = "INSERT INTO invoices (peppol_xml, status) VALUES ('$safeXml', 'new');"
+            Invoke-SqlUpdate -Query $query -ConnectionName $connectionName -ErrorAction Stop
+            Write-Host " Done." -ForegroundColor Green
+        }
+    } catch {
+        Write-Error "An error occurred: $($_.Exception.Message)"
+    } finally {
+        try { Close-SqlConnection -ConnectionName $connectionName } catch {}
+    }
+}
+
+function New-PeppolReport {
+    param(
+        [string]$DbHost = $env:DB_HOST,
+        [string]$DbUser = $env:DB_USER,
+        [string]$DbPassword = $env:DB_PASSWORD,
+        [string]$DbDatabase = $env:DB_DATABASE,
+        [string]$ReportPath = "/app/output/status_report.html"
+    )
+
+    $connectionName = "InvoicesDB_Report"
+
+    try {
+        if (-not (Get-Module -Name SimplySql -ErrorAction SilentlyContinue)) { Import-Module SimplySql -ErrorAction Stop }
+        
+        $secPass = ConvertTo-SecureString $DbPassword -AsPlainText -Force
+        $cred = New-Object System.Management.Automation.PSCredential($DbUser, $secPass)
+        Open-MySqlConnection -Server $DbHost -Credential $cred -ConnectionName $connectionName -Database $DbDatabase -ErrorAction Stop
+
+        # Get Statistics
+        $stats = Invoke-SqlQuery -Query "SELECT status, COUNT(*) as count FROM invoices GROUP BY status" -ConnectionName $connectionName
+        
+        # Get Recent Errors
+        $errors = Invoke-SqlQuery -Query "SELECT id, processed_at, error_message FROM invoices WHERE status = 'error' ORDER BY id DESC LIMIT 10" -ConnectionName $connectionName
+
+        # Build HTML
+        $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Peppol Processing Report</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .status-new { color: blue; }
+        .status-processed { color: green; }
+        .status-error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>System Status Report</h1>
+    <p>Generated at: $(Get-Date)</p>
+
+    <h2>Overview</h2>
+    <table>
+        <tr><th>Status</th><th>Count</th></tr>
+        $($stats | ForEach-Object { "<tr><td>$($_.status)</td><td>$($_.count)</td></tr>" })
+    </table>
+
+    <h2>Recent Errors</h2>
+    <table>
+        <tr><th>ID</th><th>Time</th><th>Error Message</th></tr>
+        $($errors | ForEach-Object { "<tr><td>$($_.id)</td><td>$($_.processed_at)</td><td class='status-error'>$($_.error_message)</td></tr>" })
+    </table>
+</body>
+</html>
+"@
+
+        $html | Out-File -FilePath $ReportPath -Encoding UTF8
+        Write-Host "Report generated at: $ReportPath" -ForegroundColor Green
+
+    } catch {
+        Write-Error "Failed to generate report: $($_.Exception.Message)"
+    } finally {
+        try { Close-SqlConnection -ConnectionName $connectionName } catch {}
+    }
+}
+
 Export-ModuleMember -Function *

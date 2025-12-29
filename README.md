@@ -18,8 +18,8 @@ Het systeem bestaat uit drie hoofdcomponenten die samenwerken in een Docker-omge
     *   Slaat factuurdata op in de tabel `invoices`.
     *   Gebruikt triggers voor audit logging in `invoice_audit`.
 2.  **PowerShell Container (App):**
-    *   Draait het hoofdscript `Process-Invoices.ps1` in een loop.
-    *   Gebruikt de custom module `PeppolProcessor` voor logica.
+    *   Draait het entry-script `Process-Invoices.ps1`.
+    *   Alle logica (loop, validatie, verwerking) bevindt zich in de module `PeppolProcessor`.
 3.  **Output Volume:**
     *   Gegenereerde PDF's worden opgeslagen in de gedeelde map `output/`.
 
@@ -28,6 +28,14 @@ Het systeem bestaat uit drie hoofdcomponenten die samenwerken in een Docker-omge
 ### Vereisten
 *   Docker & Docker Compose
 *   PowerShell Core (optioneel, voor lokale helper scripts)
+
+### Configuratie
+De applicatie wordt geconfigureerd via Environment Variables in `docker-compose.yml`.
+*   `DB_HOST`: De hostnaam van de database container (standaard: `db`).
+*   `DB_USER`: Database gebruiker (standaard: `root`).
+*   `DB_PASSWORD`: Database wachtwoord.
+*   `DB_DATABASE`: Naam van de database (standaard: `invoices_db`).
+*   `API_TOKEN`: (Optioneel) Token voor toekomstige API authenticatie.
 
 ### Starten
 1.  Bouw en start de containers:
@@ -39,7 +47,7 @@ Het systeem bestaat uit drie hoofdcomponenten die samenwerken in een Docker-omge
 ### Testdata Invoeren
 Gebruik het helper script om voorbeeld-facturen (zowel valide als invalide) in de database te laden:
 ```bash
-pwsh ./src/Insert-SampleData.ps1
+pwsh ./src/Insert-Data.ps1
 ```
 
 ### Resultaten Bekijken
@@ -53,8 +61,10 @@ pwsh ./src/Insert-SampleData.ps1
 ## 4. Ontwikkeling & Testing
 
 ### Structuur
-*   `src/PeppolProcessor.psm1`: Bevat alle kernfuncties (Validatie, DB connectie, PDF conversie).
-*   `src/Process-Invoices.ps1`: Het "Controller" script dat de loop draait.
+*   `src/PeppolProcessor.psm1`: De centrale module met alle logica (Main loop, Validatie, DB, PDF, Import).
+*   `src/Process-Invoices.ps1`: Entry point script dat de `Start-PeppolProcessor` functie aanroept.
+*   `src/Insert-SampleData.ps1`: Wrapper script om testdata in te laden via de module.
+*   `src/Get-Report.ps1`: Script voor het genereren van statusrapporten.
 *   `templates/`: Bevat de XSLT transformatie regels.
 
 ### Tests Draaien
@@ -188,3 +198,7 @@ See the failed invoices:
 ```
     docker-compose exec app pwsh /app/src/Get-Report.ps1
 ```
+
+## Sources:
+- Gemini Code Assist: Chat
+- https://risedocs.fairsketch.com/doc/view/164-peppol-ubl-invoice-2-1-bis-billing-3-0-e-invoice-template

@@ -21,7 +21,7 @@ BeforeAll {
     Mock -CommandName 'Convert-HtmlToPdf'
 
     # Load sample XML data
-    $script:sampleDataPath = "$PSScriptRoot/../sample_data"
+    $script:dataPath = "$PSScriptRoot/../data"
 }
 
 Describe 'Invoice Processing Logic' {
@@ -66,7 +66,7 @@ Describe 'Invoice Processing Logic' {
         It "Validation checks for <Name>" -TestCases $testCases {
             param($Name, $File, $ExpectTotals, $ExpectRules, $ExpectVat)
             
-            $path = Join-Path $script:sampleDataPath $File
+            $path = Join-Path $script:dataPath $File
             $content = Get-Content $path -Raw
             $xml = [xml]$content
 
@@ -83,7 +83,7 @@ Describe 'Invoice Processing Logic' {
         
         It "should process a valid invoice correctly" {
             # Arrange
-            $validXml = Get-Content (Join-Path $script:sampleDataPath "valid.xml") -Raw
+            $validXml = Get-Content (Join-Path $script:dataPath "valid.xml") -Raw
             $script:mockInvoices = @([PSCustomObject]@{ id = 1; peppol_xml = $validXml })
             
             # Act - Simulate one loop iteration
@@ -109,7 +109,7 @@ Describe 'Invoice Processing Logic' {
 
         It "should catch a validation error" {
             # Arrange
-            $invalidXmlContent = Get-Content (Join-Path $script:sampleDataPath "invalid-totals.xml") -Raw
+            $invalidXmlContent = Get-Content (Join-Path $script:dataPath "invalid-totals.xml") -Raw
             $script:mockInvoices = @([PSCustomObject]@{ id = 2; peppol_xml = $invalidXmlContent })
 
             # Act
