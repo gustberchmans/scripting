@@ -9,11 +9,11 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_DATABASE=${DB_DATABASE}
     volumes:
-      - ./output:/app/output
-      - ./src:/app/src
-      - ./tests:/app/tests
-      - ./templates:/app/templates
-      - ./data:/app/data
+      - ./output:/app/output:z
+      - ./src:/app/src:z
+      - ./tests:/app/tests:z
+      - ./templates:/app/templates:z
+      - ./data:/app/data:z
     depends_on:
       db:
         condition: service_healthy
@@ -24,7 +24,7 @@ services:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
       MYSQL_DATABASE: ${DB_DATABASE}
     volumes:
-      - ./db-init:/docker-entrypoint-initdb.d
+      - ./db-init:/docker-entrypoint-initdb.d:z
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s

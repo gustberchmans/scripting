@@ -13,6 +13,10 @@
         'Test-InvoiceBusinessRules',
         'Test-InvoiceVat',
         'Test-AuthToken',
-        'Publish-ToCloud'
+        'Publish-ToCloud',
+        'Test-VatNumberFormat',
+        'Start-PeppolProcessor',
+        'Import-PeppolData',
+        'New-PeppolReport'
     )
 }

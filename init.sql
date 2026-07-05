@@ -4,6 +4,8 @@ USE invoices_db;
 CREATE TABLE IF NOT EXISTS invoices (
     id INT AUTO_INCREMENT PRIMARY KEY,
     peppol_xml LONGTEXT NOT NULL,
+    supplier_vat VARCHAR(50) NULL,
+    customer_vat VARCHAR(50) NULL,
     status VARCHAR(50) DEFAULT 'new',
     processed_at DATETIME NULL,
     error_message TEXT NULL

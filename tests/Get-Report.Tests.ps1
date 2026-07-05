@@ -1,23 +1,18 @@
-$scriptPath = "$PSScriptRoot/../src/Get-Report.ps1"
-
 Describe "Get-Report.ps1" {
     BeforeAll {
+        $script:scriptPath = (Get-Item "$PSScriptRoot/../src/Get-Report.ps1").FullName
+        Import-Module "$PSScriptRoot/../src/PeppolProcessor.psm1" -Force
         # Mock external dependencies to prevent actual execution
         Mock -CommandName Import-Module -MockWith { }
-        Mock -CommandName Open-MySqlConnection -MockWith { }
-        Mock -CommandName Close-SqlConnection -MockWith { }
-        Mock -CommandName ConvertTo-SecureString -MockWith { return "secure" }
-        Mock -CommandName New-Object -MockWith { return [PSCustomObject]@{} }
-        Mock -CommandName Write-Host -MockWith { }
-        Mock -CommandName Write-Warning -MockWith { }
-        Mock -CommandName Write-Error -MockWith { }
-        Mock -CommandName Out-File -MockWith { }
-        Mock -CommandName Get-Content -MockWith { return "DB_PASSWORD=secret" }
-        Mock -CommandName Set-Item -MockWith { }
-        Mock -CommandName Add-Type -MockWith { }
+        Mock -CommandName Open-MySqlConnection -MockWith { } -ModuleName 'PeppolProcessor'
+        Mock -CommandName Close-SqlConnection -MockWith { } -ModuleName 'PeppolProcessor'
+        Mock -CommandName Write-Host -MockWith { } -ModuleName 'PeppolProcessor'
+        Mock -CommandName Write-Warning -MockWith { } -ModuleName 'PeppolProcessor'
+        Mock -CommandName Write-Error -MockWith { } -ModuleName 'PeppolProcessor'
+        Mock -CommandName Out-File -MockWith { } -ModuleName 'PeppolProcessor'
         
         # Mock Join-Path to avoid path issues in mocks
-        Mock -CommandName Join-Path -MockWith { return "$($args[0])/$($args[1])" }
+        Mock -CommandName Join-Path -MockWith { return "$($args[0])/$($args[1])" } -ModuleName 'PeppolProcessor'
 
         # Mock Test-Path
         # Return false for /app/lib to skip PDF generation logic which requires DLLs
@@ -25,7 +20,7 @@ Describe "Get-Report.ps1" {
             param($Path)
             if ($Path -eq "/app/lib") { return $false }
             return $true 
-        }
+        } -ModuleName 'PeppolProcessor'
 
         # Mock Invoke-SqlQuery to return dummy data
         Mock -CommandName Invoke-SqlQuery -MockWith {
@@ -42,17 +37,17 @@ Describe "Get-Report.ps1" {
                 )
             }
             return @()
-        }
+        } -ModuleName 'PeppolProcessor'
     }
 
     It "Generates an HTML report with correct statistics" {
         # Run the script with a dummy password to bypass parameter checks
-        & $scriptPath -dbPassword "test"
+        & $script:scriptPath -dbPassword "test"
 
         # Verify SQL queries were executed (Stats + Errors)
-        Assert-MockCalled Invoke-SqlQuery -Times 2
+        Assert-MockCalled Invoke-SqlQuery -Times 2 -ModuleName 'PeppolProcessor'
         
         # Verify the report file was written
-        Assert-MockCalled Out-File -Times 1
+        Assert-MockCalled Out-File -Times 1 -ModuleName 'PeppolProcessor'
     }
 }

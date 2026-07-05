@@ -3,8 +3,21 @@
   Core logic for Peppol Invoice Processing.
 #>
 
+<#
+.SYNOPSIS
+  Loads required iText 7 and BouncyCastle assemblies into the PowerShell session.
+.DESCRIPTION
+  This function loops through a list of essential DLL files in the specified library path
+  and loads them using Add-Type. It also registers system encoding providers needed by iText.
+.PARAMETER LibPath
+  The directory path containing the .NET assemblies.
+#>
 function Initialize-PeppolPdfLibrary {
-    param([string]$LibPath)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$LibPath
+    )
     
     try {
         $dlls = @(
@@ -39,33 +52,71 @@ function Initialize-PeppolPdfLibrary {
     }
 }
 
+<#
+.SYNOPSIS
+  Establishes a connection to the MySQL database, ensures the database schema is up-to-date,
+  creates the necessary tables (invoices and audit logging), and registers the database triggers.
+.DESCRIPTION
+  This function uses the SimplySql module to open a MySQL connection. It initializes the database
+  and ensures that columns for storing XML, processing status, and VAT numbers exist.
+.PARAMETER Server
+  The host name or IP address of the MySQL database server.
+.PARAMETER User
+  The username used to connect to the database.
+.PARAMETER Password
+  De password used to connect to the database.
+.PARAMETER Database
+  The name of the database to use or create.
+.PARAMETER ConnectionName
+  The symbolic name for the SimplySql connection.
+.EXAMPLE
+  Connect-Database -Server "localhost" -User "root" -Password "secret" -Database "invoices_db" -ConnectionName "InvoicesDB"
+#>
 function Connect-Database {
     param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
         [string]$Server,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
         [string]$User,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
         [string]$Password,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
         [string]$Database,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
         [string]$ConnectionName
     )
 
     try {
-        # Close existing connection if any
+        # Close existing connection if any to release resources and avoid connection leak
         try { Close-SqlConnection -ConnectionName $ConnectionName -ErrorAction Stop } catch {}
 
+        # Safely convert plain text password to SecureString for PSDecential
         $secPass = ConvertTo-SecureString $Password -AsPlainText -Force
         $cred = New-Object System.Management.Automation.PSCredential($User, $secPass)
         
-        # Connect without specifying a database first
+        # Connect without specifying a database first to ensure the server is reachable
         Open-MySqlConnection -Server $Server -Credential $cred -ConnectionName $ConnectionName -ErrorAction Stop
         
-        # Ensure Database and Schema exist
+        # Ensure Database exists and switch context to it
         Invoke-SqlUpdate -Query "CREATE DATABASE IF NOT EXISTS $Database;" -ConnectionName $ConnectionName -ErrorAction Stop
         Invoke-SqlUpdate -Query "USE $Database;" -ConnectionName $ConnectionName -ErrorAction Stop
         
+        # Schema definition for core invoices table (contains raw XML and extracted metadata)
         $tableQuery = @"
 CREATE TABLE IF NOT EXISTS invoices (
     id INT AUTO_INCREMENT PRIMARY KEY,
     peppol_xml LONGTEXT NOT NULL,
+    supplier_vat VARCHAR(50) NULL,
+    customer_vat VARCHAR(50) NULL,
     status VARCHAR(50) DEFAULT 'new',
     processed_at DATETIME NULL,
     error_message TEXT NULL
@@ -73,7 +124,21 @@ CREATE TABLE IF NOT EXISTS invoices (
 "@
         Invoke-SqlUpdate -Query $tableQuery -ConnectionName $ConnectionName -ErrorAction Stop
 
-        # Create Audit Table
+        # Schema migrations: check and add supplier_vat column if missing
+        $checkColQuery1 = "SELECT count(*) as c FROM information_schema.columns WHERE table_schema = '$Database' AND table_name = 'invoices' AND column_name = 'supplier_vat';"
+        $colExists1 = Invoke-SqlQuery -Query $checkColQuery1 -ConnectionName $ConnectionName -ErrorAction Stop
+        if ($colExists1.c -eq 0) {
+            Invoke-SqlUpdate -Query "ALTER TABLE invoices ADD COLUMN supplier_vat VARCHAR(50) NULL;" -ConnectionName $ConnectionName -ErrorAction Stop
+        }
+
+        # Schema migrations: check and add customer_vat column if missing
+        $checkColQuery2 = "SELECT count(*) as c FROM information_schema.columns WHERE table_schema = '$Database' AND table_name = 'invoices' AND column_name = 'customer_vat';"
+        $colExists2 = Invoke-SqlQuery -Query $checkColQuery2 -ConnectionName $ConnectionName -ErrorAction Stop
+        if ($colExists2.c -eq 0) {
+            Invoke-SqlUpdate -Query "ALTER TABLE invoices ADD COLUMN customer_vat VARCHAR(50) NULL;" -ConnectionName $ConnectionName -ErrorAction Stop
+        }
+        
+        # Create Audit Table for tracing invoice status transitions
         $auditTableQuery = @"
 CREATE TABLE IF NOT EXISTS invoice_audit (
     log_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -84,7 +149,7 @@ CREATE TABLE IF NOT EXISTS invoice_audit (
 "@
         Invoke-SqlUpdate -Query $auditTableQuery -ConnectionName $ConnectionName -ErrorAction Stop
 
-        # Create Trigger
+        # Register MySQL Trigger to audit log new invoices automatically
         Invoke-SqlUpdate -Query "DROP TRIGGER IF EXISTS after_invoice_insert;" -ConnectionName $ConnectionName -ErrorAction Stop
         $triggerQuery = @"
 CREATE TRIGGER after_invoice_insert 
@@ -100,8 +165,48 @@ INSERT INTO invoice_audit (invoice_id, action) VALUES (NEW.id, 'NEW_INVOICE_RECE
     }
 }
 
+<#
+.SYNOPSIS
+  Updates the processing status of an invoice in the database.
+.DESCRIPTION
+  This function updates the status of an invoice (e.g., to 'processing', 'processed', or 'error'),
+  sets the processing timestamp, and saves any error messages or extracted supplier/customer VAT numbers.
+.PARAMETER InvoiceId
+  The ID of the invoice to update.
+.PARAMETER Status
+  The new status of the invoice. Must be one of 'new', 'processing', 'processed', or 'error'.
+.PARAMETER ErrorMessage
+  An optional error message to save if the processing failed.
+.PARAMETER SupplierVat
+  An optional supplier VAT number extracted from the XML to be saved in the database.
+.PARAMETER CustomerVat
+  An optional customer VAT number extracted from the XML to be saved in the database.
+.PARAMETER ConnectionName
+  The name of the database connection.
+#>
 function Update-InvoiceStatus {
-    param($InvoiceId, $Status, $ErrorMessage = $null, $ConnectionName)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateRange(1, [int]::MaxValue)]
+        [int]$InvoiceId,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('new', 'processing', 'processed', 'error')]
+        [string]$Status,
+
+        [Parameter(Mandatory=$false)]
+        [string]$ErrorMessage = $null,
+
+        [Parameter(Mandatory=$false)]
+        [string]$SupplierVat = $null,
+
+        [Parameter(Mandatory=$false)]
+        [string]$CustomerVat = $null,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ConnectionName = "InvoicesDB"
+    )
     
     Write-Host "Updating invoice ID $InvoiceId to status '$Status'."
     $query = "UPDATE invoices SET status = '$Status', processed_at = NOW()"
@@ -109,13 +214,42 @@ function Update-InvoiceStatus {
         $sanitizedError = $ErrorMessage.Replace("'", "''")
         $query += ", error_message = '$sanitizedError'"
     }
+    if ($SupplierVat) {
+        $sanitizedSupplier = $SupplierVat.Replace("'", "''")
+        $query += ", supplier_vat = '$sanitizedSupplier'"
+    }
+    if ($CustomerVat) {
+        $sanitizedCustomer = $CustomerVat.Replace("'", "''")
+        $query += ", customer_vat = '$sanitizedCustomer'"
+    }
     $query += " WHERE id = $InvoiceId;"
     
     Invoke-SqlUpdate -Query $query -ConnectionName $ConnectionName -ErrorAction Stop
 }
 
+<#
+.SYNOPSIS
+  Transforms raw UBL XML content into HTML using an XSLT template.
+.DESCRIPTION
+  This function uses .NET's System.Xml.Xsl.XslCompiledTransform class to parse and transform
+  an XML string input into an HTML string output based on a stylesheet path.
+.PARAMETER XmlContent
+  The raw Peppol UBL XML string to transform.
+.PARAMETER XsltPath
+  The filesystem path to the XSLT stylesheet file.
+.RETURN
+  A string containing the generated HTML document.
+#>
 function ConvertTo-InvoiceHtml {
-    param([string]$XmlContent, [string]$XsltPath)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$XmlContent,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$XsltPath
+    )
     
     $xslt = New-Object System.Xml.Xsl.XslCompiledTransform;
     $xslt.Load($XsltPath)
@@ -125,8 +259,33 @@ function ConvertTo-InvoiceHtml {
     return $stringWriter.ToString()
 }
 
+<#
+.SYNOPSIS
+  Converts an HTML string into a PDF file using iText 7 html2pdf.
+.DESCRIPTION
+  This function uses the imported iText 7 html2pdf library's HtmlConverter class to render
+  the HTML document to an A4 PDF document.
+.PARAMETER HtmlContent
+  The HTML document string to render.
+.PARAMETER OutputPath
+  The destination filepath for the generated PDF.
+.PARAMETER BaseUri
+  The base directory path used by the HTML renderer to resolve relative paths (e.g. stylesheet assets).
+#>
 function Convert-HtmlToPdf {
-    param([string]$HtmlContent, [string]$OutputPath, [string]$BaseUri)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$HtmlContent,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$OutputPath,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$BaseUri
+    )
     
     $pdfWriter = [iText.Kernel.Pdf.PdfWriter]::new($OutputPath)
     $pdfDocument = [iText.Kernel.Pdf.PdfDocument]::new($pdfWriter)
@@ -137,8 +296,23 @@ function Convert-HtmlToPdf {
     $pdfDocument.Close()
 }
 
+<#
+.SYNOPSIS
+  Validates that line item totals sum up to the invoice header totals.
+.DESCRIPTION
+  This function parses the XML document to verify that the sum of all individual InvoiceLine/LineExtensionAmount values
+  matches the header LegalMonetaryTotal/LineExtensionAmount, and that line extensions correctly balance with allowances and charges.
+.PARAMETER XmlDoc
+  The parsed [xml] document of the Peppol invoice.
+.RETURN
+  True if the totals match and are consistent, False otherwise.
+#>
 function Test-InvoiceTotals {
-    param([xml]$XmlDoc)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNull()]
+        [xml]$XmlDoc
+    )
     if (-not $XmlDoc) { return $false }
     $ns = New-Object System.Xml.XmlNamespaceManager($XmlDoc.NameTable)
     $ns.AddNamespace('cac', 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2')
@@ -181,8 +355,113 @@ function Test-InvoiceTotals {
     return $declaredTotal -eq $calculatedTotal
 }
 
+<#
+.SYNOPSIS
+  Validates a VAT (BTW) number format.
+.DESCRIPTION
+  This helper function cleans the VAT number by removing common separator characters 
+  (spaces, periods, hyphens) and checks it against NL, BE, and general EU format regular expressions.
+.PARAMETER VatNumber
+  The VAT identifier string to validate.
+.OUTPUTS
+  [bool] True if the VAT format is valid, False otherwise.
+.EXAMPLE
+  Test-VatNumberFormat -VatNumber "NL123456789B01"
+#>
+function Test-VatNumberFormat {
+    param(
+        [Parameter(Mandatory=$false)]
+        [string]$VatNumber
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($VatNumber)) {
+        return $false
+    }
+    
+    # Strip separators and force uppercase
+    $cleaned = $VatNumber.Replace(" ", "").Replace(".", "").Replace("-", "").ToUpper()
+    
+    # NL format: NL + 9 digits + B + 2 digits (e.g. NL123456789B01)
+    if ($cleaned -match '^NL\d{9}B\d{2}$') {
+        return $true
+    }
+    
+    # BE format: BE + 10 digits (e.g. BE0123456789)
+    if ($cleaned -match '^BE\d{10}$') {
+        return $true
+    }
+    
+    # General EU VAT format: 2-letter country code + 2 to 12 alphanumeric characters
+    if ($cleaned -match '^[A-Z]{2}[A-Z0-9]{2,12}$') {
+        return $true
+    }
+    
+    return $false
+}
+
+<#
+.SYNOPSIS
+  Validates standard VAT identification number formats for EU member states.
+.DESCRIPTION
+  This function cleans the input VAT number (removes non-alphanumeric characters) and checks it
+  against specific regular expressions for the Netherlands (NL), Belgium (BE), Germany (DE),
+  France (FR), and a generic EU fallback pattern.
+.PARAMETER VatNumber
+  The VAT string to validate.
+.RETURN
+  True if the format is correct, False otherwise.
+#>
+function Test-VatNumberFormat {
+    param(
+        [Parameter(Mandatory=$false)]
+        [string]$VatNumber = $null
+    )
+
+    if ([string]::IsNullOrWhiteSpace($VatNumber)) { return $false }
+
+    # Clean the input by removing spaces, dots, dashes, etc., and uppercase it
+    $clean = ($VatNumber -replace '[^A-Za-z0-9]', '').ToUpper()
+
+    # General structure check: must start with 2 letters followed by 2 to 12 alphanumeric characters
+    if ($clean -notmatch '^[A-Z]{2}[A-Z0-9]{2,12}$') { return $false }
+
+    $country = $clean.Substring(0, 2)
+    $rest = $clean.Substring(2)
+
+    # VAT numbers cannot be purely alphabetic after the country code
+    if ($rest -match '^[A-Z]+$') { return $false }
+
+    # Check country-specific formats
+    switch ($country) {
+        "NL" { return $rest -match '^\d{9}B\d{2}$' }
+        "BE" { return $rest -match '^\d{9,10}$' }
+        "DE" { return $rest -match '^\d{9}$' }
+        "FR" { return $rest -match '^[A-Z0-9]{2}\d{9}$' }
+        default {
+            # General fallback check: must contain at least one digit
+            return $rest -match '\d'
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+  Validates standard UBL business rules on the XML invoice document.
+.DESCRIPTION
+  This function checks essential billing rules: supplier and customer names must exist and not be purely numeric,
+  the issue date must be present, document currency must match line currency codes, quantities/prices must be non-negative,
+  and supplier and customer VAT numbers must be present and valid.
+.PARAMETER XmlDoc
+  The parsed [xml] document of the Peppol invoice.
+.RETURN
+  True if all business rules check out, False otherwise.
+#>
 function Test-InvoiceBusinessRules {
-    param([xml]$XmlDoc)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNull()]
+        [xml]$XmlDoc
+    )
     if (-not $XmlDoc) { return $false }
     $ns = New-Object System.Xml.XmlNamespaceManager($XmlDoc.NameTable)
     $ns.AddNamespace('cac', 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2')
@@ -204,6 +483,35 @@ function Test-InvoiceBusinessRules {
     
     $issueDate = $XmlDoc.SelectSingleNode("//cbc:IssueDate", $ns)
     if (-not $issueDate -or [string]::IsNullOrWhiteSpace($issueDate.'#text')) { return $false }
+
+    # Validate VAT Numbers (Supplier and Customer)
+    # Extract Supplier VAT (BT-31)
+    $supplierVatNode = $XmlDoc.SelectSingleNode("//cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme[cac:TaxScheme/cbc:ID='VAT']/cbc:CompanyID", $ns)
+    if (-not $supplierVatNode) {
+        $supplierVatNode = $XmlDoc.SelectSingleNode("//cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID", $ns)
+    }
+    if (-not $supplierVatNode -or [string]::IsNullOrWhiteSpace($supplierVatNode.'#text')) {
+        Write-Host "Validation failed: Supplier VAT number is missing." -ForegroundColor Yellow
+        return $false
+    }
+    if (-not (Test-VatNumberFormat -VatNumber $supplierVatNode.'#text')) {
+        Write-Host "Validation failed: Supplier VAT number format is invalid ($($supplierVatNode.'#text'))." -ForegroundColor Yellow
+        return $false
+    }
+
+    # Extract Customer VAT (BT-48)
+    $customerVatNode = $XmlDoc.SelectSingleNode("//cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme[cac:TaxScheme/cbc:ID='VAT']/cbc:CompanyID", $ns)
+    if (-not $customerVatNode) {
+        $customerVatNode = $XmlDoc.SelectSingleNode("//cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID", $ns)
+    }
+    if (-not $customerVatNode -or [string]::IsNullOrWhiteSpace($customerVatNode.'#text')) {
+        Write-Host "Validation failed: Customer VAT number is missing." -ForegroundColor Yellow
+        return $false
+    }
+    if (-not (Test-VatNumberFormat -VatNumber $customerVatNode.'#text')) {
+        Write-Host "Validation failed: Customer VAT number format is invalid ($($customerVatNode.'#text'))." -ForegroundColor Yellow
+        return $false
+    }
     
     # Validate Currency Consistency
     $docCurrencyNode = $XmlDoc.SelectSingleNode("//cbc:DocumentCurrencyCode", $ns)
@@ -240,8 +548,26 @@ function Test-InvoiceBusinessRules {
     return $true
 }
 
+<#
+.SYNOPSIS
+  Validates standard VAT calculations and consistency on the XML invoice document.
+.DESCRIPTION
+  This function loops through all TaxSubtotal elements in the XML to check that:
+  1. The calculated tax matches the declared tax amount based on the category percent.
+  2. The sum of taxable bases matches the header TaxExclusiveAmount.
+  3. TaxExclusiveAmount + TaxAmount = TaxInclusiveAmount.
+  4. TaxInclusiveAmount matches the PayableAmount.
+.PARAMETER XmlDoc
+  The parsed [xml] document of the Peppol invoice.
+.RETURN
+  True if VAT calculations are consistent, False otherwise.
+#>
 function Test-InvoiceVat {
-    param([xml]$XmlDoc)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNull()]
+        [xml]$XmlDoc
+    )
     if (-not $XmlDoc) { return $false }
 
     $ns = New-Object System.Xml.XmlNamespaceManager($XmlDoc.NameTable)
@@ -294,15 +620,42 @@ function Test-InvoiceVat {
     return $true
 }
 
+<#
+.SYNOPSIS
+  Verifies that a provided token matches the API_TOKEN environment variable.
+.DESCRIPTION
+  This function compares the given string against the configured API_TOKEN for basic authentication.
+.PARAMETER Token
+  The token string to verify.
+.RETURN
+  True if the token is valid, False otherwise.
+#>
 function Test-AuthToken {
-    param([string]$Token)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Token
+    )
     $validToken = $env:API_TOKEN
     if ([string]::IsNullOrEmpty($validToken)) { return $false }
     return $Token -eq $validToken
 }
 
+<#
+.SYNOPSIS
+  Simulates uploading a generated PDF invoice to a cloud storage location.
+.DESCRIPTION
+  This function creates a 'cloud_sync' folder adjacent to the output PDF file and copies
+  the PDF to it to mock a synchronization workflow.
+.PARAMETER PdfPath
+  The local filepath of the generated PDF invoice.
+#>
 function Publish-ToCloud {
-    param([string]$PdfPath)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$PdfPath
+    )
     
     # Simulate uploading to a cloud folder (e.g., OneDrive/SharePoint sync folder)
     $parentDir = Split-Path $PdfPath
@@ -314,24 +667,81 @@ function Publish-ToCloud {
     Write-Host "   -> Uploaded to Cloud Storage (Simulated at $cloudDir)" -ForegroundColor Cyan
 }
 
+<#
+.SYNOPSIS
+  Starts the core invoice processing loop.
+.DESCRIPTION
+  This function initializes the iText PDF libraries, connects to the database, and begins
+  polling the `invoices` table for new records (status = 'new'). For each new invoice, it:
+  1. Validates the XML structure, totals, business rules, and VAT.
+  2. Extracts the supplier and customer VAT numbers.
+  3. Updates the invoice status to 'processing' and stores the extracted VAT numbers.
+  4. Transforms the XML to HTML via XSLT.
+  5. Generates a PDF from the HTML using iText.
+  6. Copies the PDF to a cloud sync directory.
+  7. Updates the invoice status to 'processed'.
+.PARAMETER DbHost
+  Database host. Defaults to the DB_HOST environment variable.
+.PARAMETER DbUser
+  Database username. Defaults to the DB_USER environment variable.
+.PARAMETER DbPassword
+  Database password. Defaults to the DB_PASSWORD environment variable.
+.PARAMETER DbDatabase
+  Database schema name. Defaults to the DB_DATABASE environment variable.
+.PARAMETER ConnectionName
+  Symbolic name of the SQL connection. Defaults to 'InvoicesDB'.
+.PARAMETER LibPath
+  Directory containing iText .NET DLL files. Defaults to '/app/lib'.
+.PARAMETER XsltPath
+  Path to the XSLT stylesheet for HTML conversion. Defaults to '/app/templates/invoice-transform.xslt'.
+.PARAMETER OutputDir
+  Directory where generated PDFs will be stored. Defaults to '/app/output'.
+.PARAMETER PollingIntervalSeconds
+  Polling interval in seconds. Defaults to 5.
+#>
 function Start-PeppolProcessor {
     param(
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$DbHost = $env:DB_HOST,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$DbUser = $env:DB_USER,
+
+        [Parameter(Mandatory=$false)]
         [string]$DbPassword = $env:DB_PASSWORD,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$DbDatabase = $env:DB_DATABASE,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$ConnectionName = "InvoicesDB",
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$LibPath = "/app/lib",
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$XsltPath = "/app/templates/invoice-transform.xslt",
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$OutputDir = "/app/output",
+
+        [Parameter(Mandatory=$false)]
+        [ValidateRange(1, 3600)]
         [int]$PollingIntervalSeconds = 5
     )
 
-    # Initialize Libraries
+    # Initialize iText and dependency libraries
     Initialize-PeppolPdfLibrary -LibPath $LibPath
 
     Write-Host "Invoice processing started. Waiting for database to be ready..."
-    Start-Sleep -Seconds 15 # Give the database time to initialize
+    Start-Sleep -Seconds 15 # Give the database container time to initialize
 
     try {
         if (-not (Get-Module -Name SimplySql -ErrorAction SilentlyContinue)) {
@@ -369,14 +779,35 @@ function Start-PeppolProcessor {
             Write-Host "Processing invoice ID: $invoiceId"
             
             try {
-                # 1. Validate
+                # Load XML document
                 $xmlDoc = [xml]$invoice.peppol_xml
+
+                # 1. Validate
                 if (-not (Test-InvoiceTotals -XmlDoc $xmlDoc)) { throw "Validation failed: Totals mismatch." }
                 if (-not (Test-InvoiceBusinessRules -XmlDoc $xmlDoc)) { throw "Validation failed: Business rules check failed." }
                 if (-not (Test-InvoiceVat -XmlDoc $xmlDoc)) { throw "Validation failed: VAT calculation incorrect." }
 
-                # 2. Status processing
-                Update-InvoiceStatus -InvoiceId $invoiceId -Status 'processing' -ConnectionName $ConnectionName
+                # Extract Supplier and Customer VAT numbers using XML Namespaces
+                $ns = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
+                $ns.AddNamespace('cac', 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2')
+                $ns.AddNamespace('cbc', 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2')
+
+                # Extract Supplier VAT (BT-31)
+                $supplierVatNode = $xmlDoc.SelectSingleNode("//cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme[cac:TaxScheme/cbc:ID='VAT']/cbc:CompanyID", $ns)
+                if (-not $supplierVatNode) {
+                    $supplierVatNode = $xmlDoc.SelectSingleNode("//cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID", $ns)
+                }
+                $supplierVat = if ($supplierVatNode) { $supplierVatNode.'#text' } else { $null }
+
+                # Extract Customer VAT (BT-48)
+                $customerVatNode = $xmlDoc.SelectSingleNode("//cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme[cac:TaxScheme/cbc:ID='VAT']/cbc:CompanyID", $ns)
+                if (-not $customerVatNode) {
+                    $customerVatNode = $xmlDoc.SelectSingleNode("//cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID", $ns)
+                }
+                $customerVat = if ($customerVatNode) { $customerVatNode.'#text' } else { $null }
+
+                # 2. Status processing & Save VAT numbers to database
+                Update-InvoiceStatus -InvoiceId $invoiceId -Status 'processing' -SupplierVat $supplierVat -CustomerVat $customerVat -ConnectionName $ConnectionName
 
                 # 3. Transform
                 $htmlContent = ConvertTo-InvoiceHtml -XmlContent $invoice.peppol_xml -XsltPath $XsltPath
@@ -387,7 +818,7 @@ function Start-PeppolProcessor {
                 Convert-HtmlToPdf -HtmlContent $htmlContent -OutputPath $pdfPath -BaseUri $OutputDir
                 Write-Host "Successfully generated PDF: $pdfPath"
 
-                # Cloud
+                # Cloud Storage upload (simulated)
                 Publish-ToCloud -PdfPath $pdfPath
 
                 # 5. Status processed
@@ -407,12 +838,42 @@ function Start-PeppolProcessor {
     }
 }
 
+<#
+.SYNOPSIS
+  Imports Peppol UBL XML invoices from the filesystem into the MySQL database.
+.DESCRIPTION
+  This function scans a directory (or takes a single file path) for *.xml files, reads their contents,
+  and inserts them as new records in the `invoices` table with status 'new'.
+.PARAMETER SourcePath
+  The directory containing XML invoices, or a specific XML file path.
+.PARAMETER DbHost
+  Database host IP or DNS. Defaults to '127.0.0.1'.
+.PARAMETER DbUser
+  Database username. Defaults to 'root'.
+.PARAMETER DbPassword
+  Database password. Defaults to empty string.
+.PARAMETER DbDatabase
+  Database schema name. Defaults to 'invoices_db'.
+#>
 function Import-PeppolData {
     param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
         [string]$SourcePath,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$DbHost = "127.0.0.1",
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$DbUser = "root",
+
+        [Parameter(Mandatory=$false)]
         [string]$DbPassword = "",
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$DbDatabase = "invoices_db"
     )
 
@@ -447,12 +908,42 @@ function Import-PeppolData {
     }
 }
 
+<#
+.SYNOPSIS
+  Generates an HTML system report showing invoice processing stats and recent errors.
+.DESCRIPTION
+  This function queries the database to group invoices by processing status and fetch the 10 most recent error records,
+  then compiles this information into a formatted HTML status report.
+.PARAMETER DbHost
+  Database host. Defaults to the DB_HOST environment variable.
+.PARAMETER DbUser
+  Database username. Defaults to the DB_USER environment variable.
+.PARAMETER DbPassword
+  Database password. Defaults to the DB_PASSWORD environment variable.
+.PARAMETER DbDatabase
+  Database schema name. Defaults to the DB_DATABASE environment variable.
+.PARAMETER ReportPath
+  Output path where the HTML report will be saved. Defaults to '/app/output/status_report.html'.
+#>
 function New-PeppolReport {
     param(
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$DbHost = $env:DB_HOST,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$DbUser = $env:DB_USER,
+
+        [Parameter(Mandatory=$false)]
         [string]$DbPassword = $env:DB_PASSWORD,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$DbDatabase = $env:DB_DATABASE,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateNotNullOrEmpty()]
         [string]$ReportPath = "/app/output/status_report.html"
     )
 
@@ -506,7 +997,7 @@ function New-PeppolReport {
 </html>
 "@
 
-        $html | Out-File -FilePath $ReportPath -Encoding UTF8
+        $html | Out-File -FilePath $ReportPath
         Write-Host "Report generated at: $ReportPath" -ForegroundColor Green
 
     } catch {

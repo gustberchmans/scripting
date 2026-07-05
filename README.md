@@ -11,17 +11,53 @@ Dit project is een volledig geautomatiseerd systeem voor het verwerken van Peppo
 *   **Rapportage:** Ingebouwde module voor statusrapporten (HTML).
 *   **Cloud Integratie:** Simulatie van upload naar externe opslag.
 
-## 2. Architectuur
-Het systeem bestaat uit drie hoofdcomponenten die samenwerken in een Docker-omgeving:
+## 2. Architectuur & Ontwerpkeuzes
 
-1.  **MySQL Database:**
-    *   Slaat factuurdata op in de tabel `invoices`.
-    *   Gebruikt triggers voor audit logging in `invoice_audit`.
-2.  **PowerShell Container (App):**
-    *   Draait het entry-script `Process-Invoices.ps1`.
-    *   Alle logica (loop, validatie, verwerking) bevindt zich in de module `PeppolProcessor`.
-3.  **Output Volume:**
-    *   Gegenereerde PDF's worden opgeslagen in de gedeelde map `output/`.
+### Systeemarchitectuur
+Het systeem bestaat uit drie hoofdcomponenten die samenwerken in een container-omgeving via Docker Compose:
+
+1.  **MySQL Database**:
+    *   Slaat de rauwe Peppol XML-facturen en de daaruit geëxtraheerde metadata (zoals leveranciers- en klanten-BTW-nummers, status en verwerkingstijdstippen) op in de tabel `invoices`.
+    *   Voorziet automatische audit logging via een database trigger naar de tabel `invoice_audit` bij het binnenkomen van nieuwe facturen.
+2.  **PowerShell Core Container (App)**:
+    *   Draait de verwerkingsloop binnen een containerized PowerShell 7 runtime.
+    *   De core-logica is volledig geïsoleerd en modulair opgebouwd in de scriptmodule [PeppolProcessor](file:///home/gustb/Documents/02. School/02. Scripting/v1/src/PeppolProcessor.psm1).
+3.  **Output Volume**:
+    *   Een gedeelde map (`output/`) op het hostsysteem waarin de gegenereerde PDF-documenten en statusrapporten terechtkomen.
+
+---
+
+### Ontwerppatroon: Bootstrapper & Scriptmodule
+In plaats van alle logica rechtstreeks in één uitvoerbaar script te plaatsen, gebruikt dit project het **Bootstrapper-ontwerppatroon**:
+*   **De Module ([PeppolProcessor.psm1](file:///home/gustb/Documents/02. School/02. Scripting/v1/src/PeppolProcessor.psm1))**: Bevat alle herbruikbare functies (databaseverbinding, XML-validatie, transformatie en PDF-generatie). Dit scheidt de logica volledig van de runtime-omgeving en maakt het mogelijk om individuele functies eenvoudig unit te testen (bijvoorbeeld met Pester) zonder dat de verwerkingsloop gestart hoeft te worden.
+*   **De Bootstrapper ([Process-Invoices.ps1](file:///home/gustb/Documents/02. School/02. Scripting/v1/src/Process-Invoices.ps1))**: Een dunne schil (entrypoint script) die de runtime-omgeving configureert, de module inlaadt en de hoofdloop `Start-PeppolProcessor` start. Dit patroon volgt PowerShell best practices voor herbruikbaarheid en enterprise-architecturen.
+
+---
+
+### Technologie-evaluatie & Alternatieven
+
+#### Waarom PowerShell Core & MySQL?
+*   **PowerShell Core**: Biedt naadloze cross-platform functionaliteit (draait in Linux Docker containers), heeft ingebouwde XML-parsering via .NET's `[xml]` typeversneller, en kan direct .NET-bibliotheken (DLL's) inladen voor PDF-generatie.
+*   **MySQL**: Een betrouwbare, ACID-compliante relationele database die uitstekende ondersteuning biedt voor triggers, transacties en metadata-opslag.
+
+#### Waarom iText 7 (iTextSharp) voor PDF-generatie?
+Voor de conversie van UBL XML naar PDF wordt de XML eerst via een XSLT-template getransformeerd naar HTML, waarna **iText 7** (met de `html2pdf` add-on) de HTML omzet naar een A4 PDF-document.
+
+**Alternatieven en waarom ze werden verworpen:**
+1.  **wkhtmltopdf**:
+    *   *Werking*: Converteert HTML naar PDF met behulp van de WebKit-rendering engine.
+    *   *Nadeel*: Het project is momenteel "deprecated" en wordt niet langer actief onderhouden. Het heeft bekende beveiligingslekken en vereist het installeren van een externe binaire dependency buiten de .NET-omgeving.
+2.  **Puppeteer / Playwright (Headless Chrome)**:
+    *   *Werking*: Converteert HTML via een headless browser.
+    *   *Nadeel*: Zeer zwaar. Vereist Node.js en het downloaden van een complete Chromium-binaire binnen de container, wat de Docker-image aanzienlijk vergroot en onnodig veel resources verbruikt.
+3.  **Apache FOP (Formatting Objects Processor)**:
+    *   *Werking*: Converteert XML rechtstreeks naar PDF met XSL-FO (Extensible Stylesheet Language Formatting Objects).
+    *   *Nadeel*: Vereist een Java-runtime, heeft een zeer steile leercurve en het schrijven van XSL-FO stylesheets is complexer en trager dan het stylen van een HTML-document met CSS.
+4.  **PDFsharp / QuestPDF**:
+    *   *Werking*: Directe .NET-libraries om PDF's op te bouwen via code.
+    *   *Nadeel*: PDFsharp heeft zeer beperkte en verouderde ondersteuning voor HTML-conversie. QuestPDF is uitstekend voor lay-out via code (fluent API), maar ondersteunt geen directe conversie van HTML-templates uit XSLT, waardoor elke lay-out handmatig geprogrammeerd zou moeten worden.
+
+**Besluit**: **iText 7** biedt de perfecte balans. Het is een native .NET-bibliotheek die direct in PowerShell geladen kan worden, moderne HTML5/CSS3 conversie ondersteunt via `html2pdf`, platformonafhankelijk is, en een minimale voetafdruk heeft binnen de Docker-container.
 
 ## 3. Installatie & Gebruik (Getting Started)
 
@@ -192,13 +228,20 @@ Add new invoice in database:
     </cac:InvoiceLine>
 </Invoice>', 
 'new');
-
-```
 See the failed invoices:
 ```
     docker-compose exec app pwsh /app/src/Get-Report.ps1
 ```
 
-## Sources:
-- Gemini Code Assist: Chat
-- https://risedocs.fairsketch.com/doc/view/164-peppol-ubl-invoice-2-1-bis-billing-3-0-e-invoice-template
+## 5. Designbeslissingen & Bronvermelding
+
+Voor een gedetailleerde toelichting op de gekozen technologieën (zoals Docker, MySQL, PowerShell Core en iText 7), de overwogen alternatieven (wkhtmltopdf, Puppeteer, QuestPDF) en de motivatie achter de script/module-architectuur, wordt verwezen naar het document [DESIGN.md](file:///home/gustb/Documents/02.%20School/02.%20Scripting/v1/DESIGN.md).
+
+### Bronvermelding & Referenties
+
+1.  **Peppol BIS Billing 3.0 Standard:** Officiële specificatie van de Europese norm voor e-facturatie (EN 16931). [Peppol BIS Billing 3.0 Documentation](https://peppol.eu/what-is-peppol/peppol-profiles/).
+2.  **OASIS Universal Business Language (UBL) 2.1:** XML-schema standaard voor zakelijke documenten. [OASIS UBL 2.1 Standard](http://docs.oasis-open.org/ubl/os-UBL-2.1/UBL-2.1.html).
+3.  **iText 7 for .NET (html2pdf):** API-documentatie voor HTML-naar-PDF conversie. [iText 7 Developer Guide](https://itextpdf.com/en/resources/books/itext-7-converting-html-pdf-pdfhtml).
+4.  **SimplySql PowerShell Module:** Object-georiënteerde SQL client voor PowerShell. [SimplySql GitHub Repository](https://github.com/rcbensley/SimplySql).
+5.  **Pester 5 Testing Framework:** Documentatie voor het PowerShell unit testing framework. [Pester Docs](https://pester.dev/docs/quick-start).
+6.  **UBL-CIUS-NL Billing 3.0 Template:** Template voor Nederlandse Peppol-facturen. [RiseDocs NL CIUS Template](https://risedocs.fairsketch.com/doc/view/164-peppol-ubl-invoice-2-1-bis-billing-3-0-e-invoice-template).

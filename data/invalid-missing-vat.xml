@@ -1,22 +1,21 @@
 <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
     <cbc:CustomizationID>urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0</cbc:CustomizationID>
     <cbc:ProfileID>urn:fdc:peppol.eu:2017:poacc:billing:01:1.0</cbc:ProfileID>
-    <cbc:ID>INV-INVALID-RULES</cbc:ID>
+    <cbc:ID>INV-INVALID-MISSING-VAT</cbc:ID>
     <cbc:IssueDate>2023-12-22</cbc:IssueDate>
     <cbc:DueDate>2024-01-22</cbc:DueDate>
     <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
     <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
     <cbc:BuyerReference>REF-001</cbc:BuyerReference>
     <cac:AccountingSupplierParty>
-        <cac:Party><cac:PartyTaxScheme><cbc:CompanyID>NL123456789B01</cbc:CompanyID><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:PartyTaxScheme>
-            <!-- ERROR HERE: Name is purely numeric -->
-            <cac:PartyName><cbc:Name>123456</cbc:Name></cac:PartyName>
+        <cac:Party>
+            <cac:PartyName><cbc:Name>Demo Supplier Inc.</cbc:Name></cac:PartyName>
             <cac:PostalAddress><cac:Country><cbc:IdentificationCode>NL</cbc:IdentificationCode></cac:Country></cac:PostalAddress>
-            <cac:PartyLegalEntity><cbc:RegistrationName>123456</cbc:RegistrationName></cac:PartyLegalEntity>
+            <cac:PartyLegalEntity><cbc:RegistrationName>Demo Supplier Inc.</cbc:RegistrationName></cac:PartyLegalEntity>
         </cac:Party>
     </cac:AccountingSupplierParty>
     <cac:AccountingCustomerParty>
-        <cac:Party><cac:PartyTaxScheme><cbc:CompanyID>NL987654321B01</cbc:CompanyID><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:PartyTaxScheme>
+        <cac:Party>
             <cac:PartyName><cbc:Name>Test Customer Ltd.</cbc:Name></cac:PartyName>
             <cac:PostalAddress><cac:Country><cbc:IdentificationCode>NL</cbc:IdentificationCode></cac:Country></cac:PostalAddress>
             <cac:PartyLegalEntity><cbc:RegistrationName>Test Customer Ltd.</cbc:RegistrationName></cac:PartyLegalEntity>
