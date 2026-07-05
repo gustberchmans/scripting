@@ -280,4 +280,49 @@ Describe 'Invoice Processing Logic' {
             $script:connectDatabaseCalls | Should -BeGreaterThan 0
         }
     }
+
+    Context "XML Schema (XSD) Validation" {
+        It "should skip schema validation if XSD files do not exist" {
+            $tempPath = [System.IO.Path]::GetTempPath()
+            $nonExistentDir = Join-Path $tempPath "nonexistent-xsd-dir-$(Get-Random)"
+            Test-XmlSchema -XmlContent "<Invoice></Invoice>" -XsdDir $nonExistentDir | Should -Be $true
+        }
+
+        It "should validate correctly against a valid schema" {
+            # Arrange
+            $tempPath = [System.IO.Path]::GetTempPath()
+            $tempXsdDir = Join-Path $tempPath "pester-xsd-$(Get-Random)"
+            $null = New-Item -ItemType Directory -Path (Join-Path $tempXsdDir "xsd/maindoc") -Force
+            
+            # Write a simple dummy schema for the namespace
+            $schemaContent = @"
+<?xml version="1.0" encoding="utf-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+           elementFormDefault="qualified">
+  <xs:element name="Invoice">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="ID" type="xs:string" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>
+"@
+            $schemaFile = Join-Path $tempXsdDir "xsd/maindoc/UBL-Invoice-2.1.xsd"
+            $schemaContent | Out-File $schemaFile -Encoding utf8
+            
+            # Act & Assert
+            # Valid XML matching the schema
+            $validXml = '<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"><ID>INV-1</ID></Invoice>'
+            Test-XmlSchema -XmlContent $validXml -XsdDir $tempXsdDir | Should -Be $true
+            
+            # Invalid XML failing the schema (missing ID element)
+            $invalidXml = '<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"></Invoice>'
+            Test-XmlSchema -XmlContent $invalidXml -XsdDir $tempXsdDir | Should -Be $false
+            
+            # Cleanup
+            Remove-Item -Path $tempXsdDir -Recurse -Force
+        }
+    }
 }

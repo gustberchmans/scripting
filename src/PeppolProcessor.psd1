@@ -17,6 +17,8 @@
         'Test-VatNumberFormat',
         'Start-PeppolProcessor',
         'Import-PeppolData',
-        'New-PeppolReport'
+        'New-PeppolReport',
+        'Initialize-PeppolSchemas',
+        'Test-XmlSchema'
     )
 }

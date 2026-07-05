@@ -1,0 +1,11 @@
+{
+  "PollingIntervalSeconds": 5,
+  "OutputDir": "/app/output",
+  "LibPath": "/app/lib",
+  "XsltPath": "/app/templates/invoice-transform.xslt",
+  "XsdDir": "/app/templates/xsd",
+  "Templates": {
+    "380": "/app/templates/invoice-transform.xslt",
+    "381": "/app/templates/invoice-transform.xslt"
+  }
+}

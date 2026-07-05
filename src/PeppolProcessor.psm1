@@ -209,26 +209,25 @@ function Update-InvoiceStatus {
     )
     
     Write-Host "Updating invoice ID $InvoiceId to status '$Status'."
-    $query = "UPDATE invoices SET status = ?, processed_at = NOW()"
-    $params = [System.Collections.Generic.List[object]]::new()
-    $params.Add($Status) | Out-Null
+    $query = "UPDATE invoices SET status = ?status, processed_at = NOW()"
+    $params = @{ status = $Status }
     
-    if ($ErrorMessage -ne $null) {
-        $query += ", error_message = ?"
-        $params.Add($ErrorMessage) | Out-Null
+    if ($PSBoundParameters.ContainsKey('ErrorMessage')) {
+        $query += ", error_message = ?error"
+        $params.error = $ErrorMessage
     }
-    if ($SupplierVat -ne $null) {
-        $query += ", supplier_vat = ?"
-        $params.Add($SupplierVat) | Out-Null
+    if ($PSBoundParameters.ContainsKey('SupplierVat')) {
+        $query += ", supplier_vat = ?supplier"
+        $params.supplier = $SupplierVat
     }
-    if ($CustomerVat -ne $null) {
-        $query += ", customer_vat = ?"
-        $params.Add($CustomerVat) | Out-Null
+    if ($PSBoundParameters.ContainsKey('CustomerVat')) {
+        $query += ", customer_vat = ?customer"
+        $params.customer = $CustomerVat
     }
-    $query += " WHERE id = ?;"
-    $params.Add($InvoiceId) | Out-Null
+    $query += " WHERE id = ?id;"
+    $params.id = $InvoiceId
     
-    Invoke-SqlUpdate -Query $query -Parameters $params.ToArray() -ConnectionName $ConnectionName -ErrorAction Stop
+    [void](Invoke-SqlUpdate -Query $query -Parameters $params -ConnectionName $ConnectionName -ErrorAction Stop)
 }
 
 <#
@@ -445,6 +444,143 @@ function Test-VatNumberFormat {
             # General fallback check: must contain at least one digit
             return $rest -match '\d'
         }
+    }
+}
+
+<#
+.SYNOPSIS
+  Downloads and initializes the official OASIS UBL 2.1 schemas if not present.
+.DESCRIPTION
+  This helper function checks if the official UBL 2.1 invoice validation schemas are cached.
+  If not, it downloads the UBL 2.1 zip from the OASIS documentation repository, extracts it,
+  and caches it for future schema-level validations.
+.PARAMETER XsdDir
+  The folder directory where schemas are stored and cached.
+#>
+function Initialize-PeppolSchemas {
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$XsdDir
+    )
+    
+    $zipPath = Join-Path $XsdDir "UBL-2.1.zip"
+    $schemaFile = Join-Path $XsdDir "xsd/maindoc/UBL-Invoice-2.1.xsd"
+    
+    if (-not (Test-Path $schemaFile)) {
+        if (-not (Test-Path $XsdDir)) {
+            New-Item -ItemType Directory -Path $XsdDir -Force | Out-Null
+        }
+        
+        Write-Host "Official UBL 2.1 schemas not found at $XsdDir. Initializing from OASIS..." -ForegroundColor Yellow
+        $url = "https://docs.oasis-open.org/ubl/os-UBL-2.1/UBL-2.1.zip"
+        
+        try {
+            $webClient = New-Object System.Net.WebClient
+            $webClient.DownloadFile($url, $zipPath)
+            
+            Write-Host "Extracting ZIP..." -ForegroundColor Yellow
+            $oldProgress = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
+            try {
+                Expand-Archive -Path $zipPath -DestinationPath $XsdDir -Force
+            } finally {
+                $ProgressPreference = $oldProgress
+            }
+            
+            # Remove zip file
+            Remove-Item -Path $zipPath -Force
+            Write-Host "UBL 2.1 schemas successfully initialized at $XsdDir" -ForegroundColor Green
+        } catch {
+            Write-Warning "Could not download schemas from OASIS: $($_.Exception.Message). Schema validation will run in fallback structural mode."
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+  Validates a raw XML document string against the UBL XSD schema definitions.
+.DESCRIPTION
+  This function sets up a System.Xml.XmlReader with Schema validation enabled,
+  registers a validation event handler to collect errors, and parses the XML stream.
+  It requires UBL 2.1 XSD schemas to be initialized at the specified path.
+.PARAMETER XmlContent
+  The XML document string to validate.
+.PARAMETER XsdDir
+  The directory containing official UBL XSD files.
+.RETURN
+  [bool] True if validation passes without errors, False otherwise.
+#>
+function Test-XmlSchema {
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$XmlContent,
+        
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$XsdDir
+    )
+    
+    $schemaFile = Join-Path $XsdDir "xsd/maindoc/UBL-Invoice-2.1.xsd"
+    
+    if (-not (Test-Path $schemaFile)) {
+        Write-Warning "Schema file not found at $schemaFile. Skipping full XSD schema validation."
+        return $true
+    }
+    
+    try {
+        $settings = New-Object System.Xml.XmlReaderSettings
+        $settings.ValidationType = [System.Xml.ValidationType]::Schema
+        $settings.DtdProcessing = [System.Xml.DtdProcessing]::Parse
+        
+        # Load schema set recursively and disable dynamic resolving to avoid duplicate declarations
+        $schemaSet = New-Object System.Xml.Schema.XmlSchemaSet
+        $schemaSet.XmlResolver = $null
+        
+        $xsdFiles = Get-ChildItem -Path $XsdDir -Filter "*.xsd" -Recurse
+        foreach ($file in $xsdFiles) {
+            if ($file.FullName -match "xsdrt") { continue }
+            try {
+                $reader = [System.Xml.XmlReader]::Create($file.FullName, $settings)
+                $schema = [System.Xml.Schema.XmlSchema]::Read($reader, $null)
+                $schemaSet.Add($schema) | Out-Null
+                $reader.Close()
+            } catch {
+                # Ignore duplicate target namespace warnings or conflicts
+            }
+        }
+        
+        $schemaSet.Compile()
+        $settings.Schemas = $schemaSet
+        
+        $errors = [System.Collections.Generic.List[string]]::new()
+        
+        # Define validation handler
+        $handler = [System.Xml.Schema.ValidationEventHandler]{
+            param($sender, $e)
+            if ($e.Severity -eq [System.Xml.Schema.XmlSeverityType]::Error) {
+                $errors.Add("Line $($e.Exception.LineNumber), Col $($e.Exception.LinePosition): $($e.Message)")
+            }
+        }
+        $settings.add_ValidationEventHandler($handler)
+        
+        $reader = [System.Xml.XmlReader]::Create([System.IO.StringReader]::new($XmlContent), $settings)
+        while ($reader.Read()) { }
+        $reader.Close()
+        
+        if ($errors.Count -gt 0) {
+            foreach ($err in $errors) {
+                Write-Host "XSD SCHEMA ERROR: $err" -ForegroundColor Red
+            }
+            return $false
+        }
+        
+        Write-Host "XSD Schema validation passed." -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "XSD Validation failure: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
     }
 }
 
@@ -741,8 +877,45 @@ function Start-PeppolProcessor {
         [int]$PollingIntervalSeconds = 5
     )
 
+    # Load configurations from config.json if present
+    $xsdDir = "/app/templates/xsd"
+    $templatesMap = $null
+    $configPath = Join-Path $PSScriptRoot "config.json"
+    
+    if (Test-Path $configPath) {
+        try {
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+            Write-Host "Configuration loaded successfully from $configPath" -ForegroundColor Green
+            
+            # Apply configuration parameters if they were not explicitly passed as overrides
+            if (-not $PSBoundParameters.ContainsKey('PollingIntervalSeconds') -and $config.PollingIntervalSeconds) {
+                $PollingIntervalSeconds = $config.PollingIntervalSeconds
+            }
+            if (-not $PSBoundParameters.ContainsKey('OutputDir') -and $config.OutputDir) {
+                $OutputDir = $config.OutputDir
+            }
+            if (-not $PSBoundParameters.ContainsKey('LibPath') -and $config.LibPath) {
+                $LibPath = $config.LibPath
+            }
+            if (-not $PSBoundParameters.ContainsKey('XsltPath') -and $config.XsltPath) {
+                $XsltPath = $config.XsltPath
+            }
+            if ($config.XsdDir) {
+                $xsdDir = $config.XsdDir
+            }
+            if ($config.Templates) {
+                $templatesMap = $config.Templates
+            }
+        } catch {
+            Write-Warning "Could not parse config file: $($_.Exception.Message). Running with parameter defaults."
+        }
+    }
+
     # Initialize iText and dependency libraries
     Initialize-PeppolPdfLibrary -LibPath $LibPath
+
+    # Initialize UBL 2.1 schemas from OASIS (downloads if not cached)
+    Initialize-PeppolSchemas -XsdDir $xsdDir
 
     Write-Host "Invoice processing started. Waiting for database to be ready..."
     Start-Sleep -Seconds 15 # Give the database container time to initialize
@@ -786,7 +959,12 @@ function Start-PeppolProcessor {
                 # Load XML document
                 $xmlDoc = [xml]$invoice.peppol_xml
 
-                # 1. Validate
+                # 0. Structural Schema (XSD) Validation
+                if (-not (Test-XmlSchema -XmlContent $invoice.peppol_xml -XsdDir $xsdDir)) {
+                    throw "Validation failed: Structural XML Schema (XSD) validation errors found."
+                }
+
+                # 1. Business Logic & Mathematical Validation
                 if (-not (Test-InvoiceTotals -XmlDoc $xmlDoc)) { throw "Validation failed: Totals mismatch." }
                 if (-not (Test-InvoiceBusinessRules -XmlDoc $xmlDoc)) { throw "Validation failed: Business rules check failed." }
                 if (-not (Test-InvoiceVat -XmlDoc $xmlDoc)) { throw "Validation failed: VAT calculation incorrect." }
@@ -813,8 +991,17 @@ function Start-PeppolProcessor {
                 # 2. Status processing & Save VAT numbers to database
                 Update-InvoiceStatus -InvoiceId $invoiceId -Status 'processing' -SupplierVat $supplierVat -CustomerVat $customerVat -ConnectionName $ConnectionName
 
-                # 3. Transform
-                $htmlContent = ConvertTo-InvoiceHtml -XmlContent $invoice.peppol_xml -XsltPath $XsltPath
+                # 3. Transform with Dynamic XSLT Mapping
+                $invoiceTypeCodeNode = $xmlDoc.SelectSingleNode("//cbc:InvoiceTypeCode", $ns)
+                $invoiceTypeCode = if ($invoiceTypeCodeNode) { $invoiceTypeCodeNode.'#text' } else { "380" }
+                
+                $selectedXsltPath = $XsltPath
+                if ($templatesMap -and $templatesMap.$invoiceTypeCode) {
+                    $selectedXsltPath = $templatesMap.$invoiceTypeCode
+                    Write-Host "   -> Dynamically selected XSLT layout for InvoiceTypeCode ${invoiceTypeCode}: $selectedXsltPath" -ForegroundColor Cyan
+                }
+
+                $htmlContent = ConvertTo-InvoiceHtml -XmlContent $invoice.peppol_xml -XsltPath $selectedXsltPath
                 if (-not $htmlContent) { throw "Transformation to HTML failed." }
 
                 # 4. PDF
@@ -900,8 +1087,8 @@ function Import-PeppolData {
         foreach ($file in $files) {
             Write-Host "Inserting $($file.Name)..." -NoNewline
             $xmlContent = Get-Content $file.FullName -Raw
-            $query = "INSERT INTO invoices (peppol_xml, status) VALUES (?, 'new');"
-            Invoke-SqlUpdate -Query $query -Parameters $xmlContent -ConnectionName $connectionName -ErrorAction Stop
+            $query = "INSERT INTO invoices (peppol_xml, status) VALUES (?xml, 'new');"
+            [void](Invoke-SqlUpdate -Query $query -Parameters @{ xml = $xmlContent } -ConnectionName $connectionName -ErrorAction Stop)
             Write-Host " Done." -ForegroundColor Green
         }
     } catch {
