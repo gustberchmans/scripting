@@ -209,22 +209,26 @@ function Update-InvoiceStatus {
     )
     
     Write-Host "Updating invoice ID $InvoiceId to status '$Status'."
-    $query = "UPDATE invoices SET status = '$Status', processed_at = NOW()"
-    if ($ErrorMessage) {
-        $sanitizedError = $ErrorMessage.Replace("'", "''")
-        $query += ", error_message = '$sanitizedError'"
-    }
-    if ($SupplierVat) {
-        $sanitizedSupplier = $SupplierVat.Replace("'", "''")
-        $query += ", supplier_vat = '$sanitizedSupplier'"
-    }
-    if ($CustomerVat) {
-        $sanitizedCustomer = $CustomerVat.Replace("'", "''")
-        $query += ", customer_vat = '$sanitizedCustomer'"
-    }
-    $query += " WHERE id = $InvoiceId;"
+    $query = "UPDATE invoices SET status = ?, processed_at = NOW()"
+    $params = [System.Collections.Generic.List[object]]::new()
+    $params.Add($Status) | Out-Null
     
-    Invoke-SqlUpdate -Query $query -ConnectionName $ConnectionName -ErrorAction Stop
+    if ($ErrorMessage -ne $null) {
+        $query += ", error_message = ?"
+        $params.Add($ErrorMessage) | Out-Null
+    }
+    if ($SupplierVat -ne $null) {
+        $query += ", supplier_vat = ?"
+        $params.Add($SupplierVat) | Out-Null
+    }
+    if ($CustomerVat -ne $null) {
+        $query += ", customer_vat = ?"
+        $params.Add($CustomerVat) | Out-Null
+    }
+    $query += " WHERE id = ?;"
+    $params.Add($InvoiceId) | Out-Null
+    
+    Invoke-SqlUpdate -Query $query -Parameters $params.ToArray() -ConnectionName $ConnectionName -ErrorAction Stop
 }
 
 <#
@@ -896,9 +900,8 @@ function Import-PeppolData {
         foreach ($file in $files) {
             Write-Host "Inserting $($file.Name)..." -NoNewline
             $xmlContent = Get-Content $file.FullName -Raw
-            $safeXml = $xmlContent.Replace("'", "''")
-            $query = "INSERT INTO invoices (peppol_xml, status) VALUES ('$safeXml', 'new');"
-            Invoke-SqlUpdate -Query $query -ConnectionName $connectionName -ErrorAction Stop
+            $query = "INSERT INTO invoices (peppol_xml, status) VALUES (?, 'new');"
+            Invoke-SqlUpdate -Query $query -Parameters $xmlContent -ConnectionName $connectionName -ErrorAction Stop
             Write-Host " Done." -ForegroundColor Green
         }
     } catch {

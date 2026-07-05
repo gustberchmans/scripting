@@ -245,4 +245,39 @@ Describe 'Invoice Processing Logic' {
             $script:updateStatusCalls[0].CustomerVat | Should -Be "NL987654321B01"
         }
     }
+
+    Context "Database Reconnection Logic" {
+        It "should attempt database reconnection when query fails" {
+            # Arrange
+            # Mock Invoke-SqlQuery to throw a database connection error in module scope
+            Mock -CommandName 'Invoke-SqlQuery' -MockWith { throw "Database connection lost." } -ModuleName 'PeppolProcessor'
+            
+            # Mock Connect-Database to count calls in module scope
+            $script:connectDatabaseCalls = 0
+            Mock -CommandName 'Connect-Database' -MockWith {
+                $script:connectDatabaseCalls++
+            } -ModuleName 'PeppolProcessor'
+            
+            # Mock Start-Sleep to break the infinite loop on second call in module scope
+            $script:sleepCount = 0
+            Mock -CommandName 'Start-Sleep' -MockWith {
+                $script:sleepCount++
+                if ($script:sleepCount -gt 1) {
+                    throw "BreakLoop"
+                }
+            } -ModuleName 'PeppolProcessor'
+
+            # Act
+            try {
+                Start-PeppolProcessor -DbHost "localhost" -DbUser "root" -DbPassword "root" -DbDatabase "invoices_db" -ConnectionName "InvoicesDB"
+            } catch {
+                if ($_.Exception.Message -ne "BreakLoop") {
+                    throw $_
+                }
+            }
+
+            # Assert
+            $script:connectDatabaseCalls | Should -BeGreaterThan 0
+        }
+    }
 }
