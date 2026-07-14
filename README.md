@@ -73,41 +73,44 @@ De applicatie wordt geconfigureerd via Environment Variables in `docker-compose.
 *   `DB_DATABASE`: Naam van de database (standaard: `invoices_db`).
 *   `API_TOKEN`: (Optioneel) Token voor toekomstige API authenticatie.
 
-### Starten
-1.  Bouw en start de containers:
-    ```bash
-    docker-compose up --build
-    ```
-2.  Het systeem wacht automatisch tot de database beschikbaar is en begint dan met pollen.
+### Starten & Bedienen via het CLI Controlepaneel (Aanbevolen)
+Het project bevat een interactief CLI controlepaneel dat alle Docker- en testcommando's voor u automatiseert.
 
-### Testdata Invoeren
-Gebruik het helper script om voorbeeld-facturen (zowel valide als invalide) in de database te laden:
-```bash
-pwsh ./src/Insert-Data.ps1
-```
+1. Start de Docker containers in de achtergrond:
+   ```bash
+   docker-compose up --build -d
+   ```
+2. Start het interactieve controlepaneel op uw host machine (vereist PowerShell):
+   ```bash
+   pwsh ./Menu.ps1
+   ```
+   Hiermee krijgt u een menu met de volgende opties:
+   * **1. Run Pester Unit & Integration Tests**: Draait alle 43 Pester tests binnen de applicatiecontainer.
+   * **2. Seed Database with Sample Invoices**: Voegt testdata toe aan de MySQL database.
+   * **3. View System Logs**: Toont de real-time logs van de verwerkingsloop.
+   * **4. Generate & View Status Report**: Genereert een HTML statusrapport en probeert dit te openen.
+   * **5. Reset & Rebuild Docker Containers**: Herstart en herbouwt de gehele docker-omgeving.
 
-### Resultaten Bekijken
-*   **PDF's:** Controleer de map `output/` op uw host machine.
-*   **Rapportage:** Genereer een statusrapport met het volgende commando:
-    ```bash
-    docker-compose exec app pwsh /app/src/Get-Report.ps1
-    ```
-    Open vervolgens `output/status_report.html` in uw browser.
+### Handmatige Opdrachten (Alternatief)
+Als u geen PowerShell op uw host machine heeft geïnstalleerd, kunt u de commando's handmatig uitvoeren via Docker:
 
-## 4. Ontwikkeling & Testing
-
-### Structuur
-*   `src/PeppolProcessor.psm1`: De centrale module met alle logica (Main loop, Validatie, DB, PDF, Import).
-*   `src/Process-Invoices.ps1`: Entry point script dat de `Start-PeppolProcessor` functie aanroept.
-*   `src/Insert-SampleData.ps1`: Wrapper script om testdata in te laden via de module.
-*   `src/Get-Report.ps1`: Script voor het genereren van statusrapporten.
-*   `templates/`: Bevat de XSLT transformatie regels.
-
-### Tests Draaien
-Het project bevat uitgebreide Pester tests voor validatie en logica.
-```bash
-docker-compose exec app pwsh -c "Invoke-Pester /app/tests/Process-Invoices.Tests.ps1 -Output Detailed"
-```
+* **Bouwen en opstarten**:
+  ```bash
+  docker-compose up --build
+  ```
+* **Testdata Invoeren**:
+  ```bash
+  docker-compose exec app pwsh /app/src/Insert-Data.ps1
+  ```
+* **Pester Tests Uitvoeren**:
+  ```bash
+  docker-compose exec app pwsh -c "Invoke-Pester /app/tests/Process-Invoices.Tests.ps1 -Output Detailed"
+  ```
+* **Statusrapport Genereren**:
+  ```bash
+  docker-compose exec app pwsh /app/src/Get-Report.ps1
+  ```
+  De gegenereerde PDF-facturen en het HTML rapport verschijnen in de map `output/` op uw host.
 
 ---
 
