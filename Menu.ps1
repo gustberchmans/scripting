@@ -52,7 +52,7 @@ do {
                 Write-Host "Report generated at output/status_report.html" -ForegroundColor Green
                 # Open browser if xdg-open exists (Linux)
                 if (Get-Command xdg-open -ErrorAction SilentlyContinue) {
-                    Start-Process xdg-open $reportPath
+                    Start-Process xdg-open -ArgumentList "`"$reportPath`""
                 } else {
                     Write-Host "Please open the report file at: $reportPath" -ForegroundColor Yellow
                 }
